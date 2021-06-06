@@ -1,0 +1,9 @@
+#
+# FlipDot Configuration
+#
+CONFIG_WIFI_MODE_STATION=y
+# CONFIG_WIFI_MODE_AP is not set
+CONFIG_WIFI_SSID="myssid"
+CONFIG_WIFI_PASSWORD="mypassword"
+
+CONFIG_HTTPD_WS_SUPPORT=y

@@ -1,0 +1,35 @@
+menu "FlipDot Configuration"
+    choice WIFI_MODE
+        bool "WiFi Mode"
+        default WIFI_MODE_STATION
+    
+    config WIFI_MODE_STATION
+        bool "Station"
+    
+    config WIFI_MODE_AP
+        bool "AP"
+    
+    endchoice
+    config WIFI_SSID
+        string "WiFi SSID"
+        default "myssid"
+        help
+        SSID (network name) for the car to connect to.
+    
+    config WIFI_PASSWORD
+        string "WiFi Password"
+        default "mypassword"
+        help
+        WiFi password (WPA or WPA2) for the car to use.
+    config WIFI_SSID
+        string "WiFi SSID"
+        default "myssid"
+        help
+        SSID (network name) for the car to connect to.
+    
+    config WIFI_PASSWORD
+        string "WiFi Password"
+        default "mypassword"
+        help
+        WiFi password (WPA or WPA2) for the car to use.
+    endmenu
