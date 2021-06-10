@@ -13,6 +13,7 @@
 #include "lwip/apps/netbiosns.h"
 
 #include "web_server.h"
+#include "flip_dot_driver.h"
 
 static char TAG[] = "FlipDot";
 
@@ -105,7 +106,7 @@ static void start_station(void)
         },
     };
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
-    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
+    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
     ESP_LOGI(TAG, "WiFi Sta Started");
@@ -119,6 +120,7 @@ static void handle_websocket_event(websocket_event_t event, uint8_t* data, uint3
         websocket_connected = false;
     } else if (event == WEBSOCKET_EVENT_DATA) {
         printf("Got data length: %d\n", len);
+        flip_dot_driver_draw(data, len);
     } else {
         assert(false); // Unhandled
     }
@@ -158,7 +160,13 @@ void app_main() {
 #endif
     webserver_start();
     initialise_mdns();
+
+    flip_dot_driver_init();
+    flip_dot_driver_all_off();
     ESP_LOGW(TAG, "Started and running\n");
+
+
+    //flip_dot_driver_test();
 }
 
 

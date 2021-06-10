@@ -32,4 +32,36 @@ menu "FlipDot Configuration"
         default "mypassword"
         help
         WiFi password (WPA or WPA2) for the car to use.
+
+    config RS485_UART_PORT_NUM
+        int "UART port number"
+        range 0 2
+        default 2
+        help
+            UART communication port number.    
+    config RS485_UART_BAUD_RATE
+        int "UART communication speed"
+        range 1200 115200
+        default 57600
+        help
+            UART communication speed for Modbus.
+
+    config RS485_UART_RXD
+        int "UART RXD pin number"
+        default 22
+        help
+            GPIO number for UART RX pin.
+
+    config RS485_UART_TXD
+        int "UART TXD pin number"
+        range 0 34
+        default 23
+
+    config RS485_UART_RTS
+        int "UART RTS pin number"
+        default 18
+        help
+            GPIO number for UART RTS pin. This pin is connected to
+            ~RE/DE pin of RS485 transceiver to switch direction.
+
     endmenu

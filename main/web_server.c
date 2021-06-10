@@ -128,7 +128,7 @@ static esp_err_t on_client_connected(httpd_handle_t hd, int sockfd)
     server.handle = hd;
     server.sockfd = sockfd;
     server.callback(WEBSOCKET_EVENT_CONNECTED, NULL, 0);
-    ESP_ERROR_CHECK(esp_timer_start_once(server.failsafe_timer, 1000 * 1000));
+    ESP_ERROR_CHECK(esp_timer_start_once(server.failsafe_timer, 5000 * 1000));
     return ESP_OK;
 }
 
@@ -170,7 +170,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
             server.callback(WEBSOCKET_EVENT_DATA, packet.payload, packet.len);
             if (server.client_connected) {
                 esp_timer_stop(server.failsafe_timer);
-                ESP_ERROR_CHECK(esp_timer_start_once(server.failsafe_timer, 1000 * 1000));
+                ESP_ERROR_CHECK(esp_timer_start_once(server.failsafe_timer, 5000 * 1000));
             } else {
                 on_client_connected(req->handle, httpd_req_to_sockfd(req));
             }

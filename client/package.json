@@ -9,6 +9,7 @@
     "bootstrap": "^3.3.7",
     "font-awesome": "^4.7.0",
     "gh-pages": "^2.0.1",
+    "gifler": "^0.1.0",
     "i": "^0.3.6",
     "immutable": "^3.8.2",
     "jquery": "^3.3.1",

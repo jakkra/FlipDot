@@ -5,6 +5,7 @@ import { Col, Row } from 'react-bootstrap';
 import Toolbar from './Toolbar';
 import {displaySize} from './config';
 import { ToastContainer, toast } from 'react-toastify';
+import 'gifler';
 
 
 const Modes = {
@@ -33,6 +34,8 @@ export default class DrawArea extends Component {
     };
     this.drawWidth = 1;
 
+    this.displayChanged = false;
+
     this.handleMouseDown = this.handleMouseDown.bind(this);
     this.handleMouseMove = this.handleMouseMove.bind(this);
     this.handleMouseUp = this.handleMouseUp.bind(this);
@@ -49,6 +52,7 @@ export default class DrawArea extends Component {
     this.drawPixel = this.drawPixel.bind(this);
     this.handleDisplayImage = this.handleDisplayImage.bind(this);
     this.handleDrawText = this.handleDrawText.bind(this);
+    this.onDrawFrame = this.onDrawFrame.bind(this);
   }
 
   componentDidMount() {
@@ -56,7 +60,7 @@ export default class DrawArea extends Component {
     window.addEventListener("resize", this.resizeCanvas);
     this.setupCanvas();
     this.resizeCanvas();
-    this.timerID = setInterval(() => this.sendCanvasData(), 40);
+    //this.timerID = setInterval(() => this.sendCanvasData(), 250);
   }
 
   componentWillUnmount() {
@@ -76,6 +80,7 @@ export default class DrawArea extends Component {
     const ctx = this.refs.canvas.getContext('2d');
     ctx.fillStyle = this.drawingColor.hex;
     ctx.fillRect(Math.round(point.x), Math.round(point.y), this.drawWidth, this.drawWidth);
+    this.displayChanged = true;
   }
 
   handleMouseDown(mouseEvent) {
@@ -167,17 +172,14 @@ export default class DrawArea extends Component {
         if (this.type === '2d') {
           pixel = context.getImageData(x, y, 1, 1).data;
         }
-        else if (this.type === 'webgl') {
-          // TODO Handle if canvas is webgl
-          //pixel = new Uint8Array(4);
-          //context.readPixels(x, y, 1, 1, context.RGBA, context.UNSIGNED_BYTE, pixel);
-        }
 
         bytearray[index++] = pixel[0];
       }
     }
-
-    this.ws.send(bytearray);
+    //if (this.displayChanged === true) {
+      this.ws.send(bytearray);
+      this.displayChanged = false;
+    //}
   }
 
   connect(ipAddress) {
@@ -277,7 +279,7 @@ export default class DrawArea extends Component {
 
     if (mode === Modes.DRAW) {
       this.refs.video.pause();
-      this.timerID = setInterval(() => this.sendCanvasData(), 40);
+      //this.timerID = setInterval(() => this.sendCanvasData(), 250);
     } else {
       this.getVideo();
       this.refs.video.addEventListener('canplay', () => {
@@ -294,14 +296,27 @@ export default class DrawArea extends Component {
     this.drawWidth = width;
   }
 
+  onDrawFrame(ctx, frame) {
+    // update canvas size
+    //canvas.width = frame.width;
+    //canvas.height = frame.height;
+    // update canvas that we are using for Konva.Image
+    //ctx.drawImage(frame.buffer, 0, 0);
+    frame.delay = 5;
+    ctx.drawImage(frame.buffer, 0, 0, this.width, this.height);
+    this.sendCanvasData();
+    console.log("send")
+  }
+
   handleDisplayImage(url) {
     const context = this.refs.canvas.getContext('2d');
-    const image = new Image();
-    image.crossOrigin = "Anonymous";
-    image.src = url;
-    image.onload = () => {
-      context.drawImage(image, 0, 0, this.width, this.height);
-    };
+    window.gifler(url).frames(this.refs.canvas, this.onDrawFrame);
+    //const image = new Image();
+    //image.crossOrigin = "Anonymous";
+    //image.src = url;
+    //image.onload = () => {
+    //  context.drawImage(image, 0, 0, this.width, this.height);
+    //};
   }
 
   getLines(ctx, text, maxWidth) {
@@ -338,6 +353,7 @@ export default class DrawArea extends Component {
   clearCanvas() {
     const context = this.refs.canvas.getContext('2d');
     context.clearRect(0, 0, this.width, this.height);
+    this.displayChanged = true;
   }
 
   render() {
