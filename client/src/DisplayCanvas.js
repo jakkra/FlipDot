@@ -5,7 +5,6 @@ import { Col, Row } from 'react-bootstrap';
 import Toolbar from './Toolbar';
 import {displaySize} from './config';
 import { ToastContainer, toast } from 'react-toastify';
-import 'gifler';
 
 
 const Modes = {
@@ -52,7 +51,6 @@ export default class DrawArea extends Component {
     this.drawPixel = this.drawPixel.bind(this);
     this.handleDisplayImage = this.handleDisplayImage.bind(this);
     this.handleDrawText = this.handleDrawText.bind(this);
-    this.onDrawFrame = this.onDrawFrame.bind(this);
   }
 
   componentDidMount() {
@@ -60,7 +58,7 @@ export default class DrawArea extends Component {
     window.addEventListener("resize", this.resizeCanvas);
     this.setupCanvas();
     this.resizeCanvas();
-    //this.timerID = setInterval(() => this.sendCanvasData(), 250);
+    this.timerID = setInterval(() => this.sendCanvasData(), 2);
   }
 
   componentWillUnmount() {
@@ -87,6 +85,8 @@ export default class DrawArea extends Component {
     mouseEvent.preventDefault(); // Avoids scrolling page when drawing
     const point = this.relativeCoordinatesForEvent(mouseEvent);
     this.drawPixel(point);
+    const now = new Date();
+      console.log(now.getSeconds() + ':' + now.getMilliseconds());
 
     this.setState({
       isDrawing: true
@@ -176,10 +176,11 @@ export default class DrawArea extends Component {
         bytearray[index++] = pixel[0];
       }
     }
-    //if (this.displayChanged === true) {
+    if (this.displayChanged === true) {
+      
       this.ws.send(bytearray);
       this.displayChanged = false;
-    //}
+    }
   }
 
   connect(ipAddress) {
@@ -279,7 +280,7 @@ export default class DrawArea extends Component {
 
     if (mode === Modes.DRAW) {
       this.refs.video.pause();
-      //this.timerID = setInterval(() => this.sendCanvasData(), 250);
+      this.timerID = setInterval(() => this.sendCanvasData(), 2);
     } else {
       this.getVideo();
       this.refs.video.addEventListener('canplay', () => {
@@ -296,27 +297,14 @@ export default class DrawArea extends Component {
     this.drawWidth = width;
   }
 
-  onDrawFrame(ctx, frame) {
-    // update canvas size
-    //canvas.width = frame.width;
-    //canvas.height = frame.height;
-    // update canvas that we are using for Konva.Image
-    //ctx.drawImage(frame.buffer, 0, 0);
-    frame.delay = 5;
-    ctx.drawImage(frame.buffer, 0, 0, this.width, this.height);
-    this.sendCanvasData();
-    console.log("send")
-  }
-
   handleDisplayImage(url) {
     const context = this.refs.canvas.getContext('2d');
-    window.gifler(url).frames(this.refs.canvas, this.onDrawFrame);
-    //const image = new Image();
-    //image.crossOrigin = "Anonymous";
-    //image.src = url;
-    //image.onload = () => {
-    //  context.drawImage(image, 0, 0, this.width, this.height);
-    //};
+    const image = new Image();
+    image.crossOrigin = "Anonymous";
+    image.src = url;
+    image.onload = () => {
+      context.drawImage(image, 0, 0, this.width, this.height);
+    };
   }
 
   getLines(ctx, text, maxWidth) {

@@ -14,12 +14,19 @@
 
 #include "web_server.h"
 #include "flip_dot_driver.h"
+#include "angle_input.h"
+
 
 static char TAG[] = "FlipDot";
 
 #define USE_STATION
+#define ANGFLE_BUFFER_SIZE 10
+#define OLD_ANGLE_LIMIT_MS 3000
+
 
 static bool websocket_connected = false;
+static int8_t angle_buffer[2][ANGFLE_BUFFER_SIZE];
+static int angle_buffer_index = 0;
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
@@ -143,6 +150,56 @@ static void initialise_mdns(void)
     netbiosns_set_name("flip-dot");
 }
 
+uint32_t map(uint32_t x, uint32_t in_min, uint32_t in_max, uint32_t out_min, uint32_t out_max) {
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+
+
+static uint8_t frameBuffer[14][28];
+static uint32_t frameBufferTime[14][28];
+
+int cmpfunc (const void * a, const void * b) {
+   return ( *(int8_t*)a - *(int8_t*)b );
+}
+
+static void angle_callback(int8_t azimuth, int8_t elevation)
+{
+    uint32_t ms_now = esp_timer_get_time() / 1000;
+    azimuth = azimuth * -1;
+    if (azimuth > 45) {
+        azimuth = 45;
+    }
+    if (azimuth < -45) {
+        azimuth = -45;
+    }
+
+    if (elevation > 45) {
+        elevation = 45;
+    }
+    if (elevation < -45) {
+        elevation = -45;
+    }
+
+    angle_buffer[0][angle_buffer_index % ANGFLE_BUFFER_SIZE] = azimuth;
+    angle_buffer[1][angle_buffer_index % ANGFLE_BUFFER_SIZE] = elevation;
+
+    qsort(&angle_buffer[0], ANGFLE_BUFFER_SIZE, sizeof(int8_t), cmpfunc);
+    qsort(&angle_buffer[1], ANGFLE_BUFFER_SIZE, sizeof(int8_t), cmpfunc);
+    angle_buffer_index++;
+    printf("%d, %d, %d\n", ms_now, angle_buffer[0][ANGFLE_BUFFER_SIZE / 2], angle_buffer[1][ANGFLE_BUFFER_SIZE / 2]);
+    frameBuffer[map(angle_buffer[1][ANGFLE_BUFFER_SIZE / 2], -45, 45, 0, 13)][map(angle_buffer[0][ANGFLE_BUFFER_SIZE / 2], -45, 45, 0, 27)] = 1;
+    frameBufferTime[map(angle_buffer[1][ANGFLE_BUFFER_SIZE / 2], -45, 45, 0, 13)][map(angle_buffer[0][ANGFLE_BUFFER_SIZE / 2], -45, 45, 0, 27)] = ms_now;
+    flip_dot_driver_draw((uint8_t*)frameBuffer, 28 * 14);
+
+    for (int i = 0; i < 14; i++) {
+        for (int j = 0; j < 28; j++) {
+            if (frameBufferTime[i][j] + OLD_ANGLE_LIMIT_MS < ms_now) {
+                frameBuffer[i][j] = 0;
+            }
+        }
+    }
+}
+
 void app_main() {
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -164,7 +221,10 @@ void app_main() {
     flip_dot_driver_init();
     flip_dot_driver_all_off();
     ESP_LOGW(TAG, "Started and running\n");
-
+    memset(angle_buffer, 0, sizeof(angle_buffer));
+    memset(frameBuffer, 0, sizeof(frameBuffer));
+    memset(frameBufferTime, 0, sizeof(frameBufferTime));
+    //angle_input_init(angle_callback);
 
     //flip_dot_driver_test();
 }
