@@ -1,8 +1,11 @@
+#include <inttypes.h>
+#include "flip_dot_driver.h"
 #include "driver/uart.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "esp_log.h"
 #include <string.h>
+#include "font.h"
 
 #define TAG "FLIP_DOT_DRIVER"
 
@@ -36,6 +39,8 @@ uint8_t all_dark[]= {0x80, 0x83, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 uint8_t test[]= {0x80, 0x83, 0xFF, 0x00, 0x7F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x8F};
 
 static const int uart_num = ECHO_UART_PORT;
+
+
 
 static void send_to_flip_dot(const int port, uint8_t* data, uint8_t length)
 {
@@ -92,30 +97,39 @@ void flip_dot_driver_all_off(void)
     send_to_flip_dot(uart_num, all_dark, sizeof(all_dark));
 }
 
+void flip_dot_driver_print_character(uint8_t character, uint8_t offset, uint8_t framebuffer[14][28])
+{
+    int row = 0;
+    int col = 0;
+    for (int i = 0; i < 14*28; i++) {
+        if (i > 0 && i % 28 == 0) {
+            row++;
+            col = 0;
+        }
+        if (col >= offset && col < offset + 3 && row < 6) {
+            if (font36[character][row][col - offset] == 1) {
+                framebuffer[row][col] = 1;
+            }
+        }
+        
+        col++;
+    }
+}
+
 void flip_dot_driver_test(void)
 {
-    uint8_t data[DATA_LENGTH];
-    uint8_t counter = 0;
-    int delay = 500;
-    while (1) {
-        memset(data, 0, sizeof(data));
-        data[0] = 0x80;
-        data[1] = 0x83;
-        data[2] = 0xFF;
-        data[DATA_LENGTH - 1] = 0x8F;
-        for (int i = 3; i < DATA_LENGTH - 1; i++) {
-            data[i] = 1 << (counter % 7);
-        }
-        send_to_flip_dot(uart_num, data, sizeof(data));
-        vTaskDelay(pdMS_TO_TICKS(delay));
-        counter++;
-        if (counter % 7 == 0) {
-            delay = delay /2;
-        }
-        if (delay < 50) {
-            delay = 50;
-        }
-    }
+    uint8_t framebuffer[14][28];
+    memset(framebuffer, 0, sizeof(framebuffer));
+    
+    flip_dot_driver_print_character(0, 0, framebuffer);
+    flip_dot_driver_print_character(1, 4, framebuffer);
+    flip_dot_driver_print_character(2, 8, framebuffer);
+    flip_dot_driver_print_character(3, 12, framebuffer);
+    flip_dot_driver_print_character(4, 16, framebuffer);
+    flip_dot_driver_print_character(5, 20, framebuffer);
+    flip_dot_driver_print_character(6, 24, framebuffer);
+
+    flip_dot_driver_draw(framebuffer, sizeof(framebuffer));
 }
 
 void flip_dot_driver_draw(uint8_t* data, uint32_t len)

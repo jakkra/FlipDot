@@ -15,7 +15,7 @@
 #include "web_server.h"
 #include "flip_dot_driver.h"
 #include "angle_input.h"
-
+#include "esp_sntp.h"
 
 static char TAG[] = "FlipDot";
 
@@ -200,6 +200,63 @@ static void angle_callback(int8_t azimuth, int8_t elevation)
     }
 }
 
+void time_sync_notification_cb(struct timeval *tv)
+{
+    ESP_LOGI(TAG, "Notification of a time synchronization event");
+}
+
+static void initialize_sntp(void)
+{
+    ESP_LOGI(TAG, "Initializing SNTP");
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    sntp_setservername(0, "pool.ntp.org");
+    sntp_set_time_sync_notification_cb(time_sync_notification_cb);
+#ifdef CONFIG_SNTP_TIME_SYNC_METHOD_SMOOTH
+    sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH);
+#endif
+    sntp_init();
+}
+
+#define BUF_SIZE (1024)
+
+#define UART_PORT_NUM   1
+
+static angle_event_callback* pCallback;
+
+static void sntp_sync_time_thread(void *arg)
+{
+    time_t now;
+    uint8_t framebuffer[14][28];
+    char strftime_buf[64];
+    struct tm timeinfo;
+    int retry = 0;
+    
+    while (sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET) {
+        ESP_LOGI(TAG, "Waiting for system time to be set... (%d)", retry);
+        vTaskDelay(2000 / portTICK_PERIOD_MS);
+    }
+    setenv("TZ", "CET-1CEST", 1);
+    tzset();
+
+    while(1) {
+        memset(framebuffer, 0, sizeof(framebuffer));
+        time(&now);
+        localtime_r(&now, &timeinfo);
+        strftime(strftime_buf, sizeof(strftime_buf), "%X", &timeinfo);
+        ESP_LOGI(TAG, "The current date/time in Sweden is: %s", strftime_buf);
+
+        flip_dot_driver_print_character(strftime_buf[0] -  '0', 0, framebuffer);
+        flip_dot_driver_print_character(strftime_buf[1] -  '0', 4, framebuffer);
+        flip_dot_driver_print_character(strftime_buf[3] -  '0', 8, framebuffer);
+        flip_dot_driver_print_character(strftime_buf[4] -  '0', 12, framebuffer);
+        flip_dot_driver_print_character(strftime_buf[6] -  '0', 16, framebuffer);
+        flip_dot_driver_print_character(strftime_buf[7] -  '0', 20, framebuffer);
+
+        flip_dot_driver_draw(framebuffer, sizeof(framebuffer));
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
 void app_main() {
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -217,6 +274,7 @@ void app_main() {
 #endif
     webserver_start();
     initialise_mdns();
+    initialize_sntp();
 
     flip_dot_driver_init();
     flip_dot_driver_all_off();
@@ -227,6 +285,7 @@ void app_main() {
     //angle_input_init(angle_callback);
 
     //flip_dot_driver_test();
+    xTaskCreate(sntp_sync_time_thread, "sntp_sync_time_thread", 2048, NULL, 10, NULL);
 }
 
 
