@@ -17,6 +17,9 @@
 #include "angle_input.h"
 #include "esp_sntp.h"
 #include "framebuffer.h"
+#include "fonts/font_3x6.h"
+#include "fonts/font_pzim3x5.h"
+#include "fonts/font_bmspa.h"
 
 static char TAG[] = "FlipDot";
 
@@ -234,7 +237,7 @@ static void sntp_sync_time_thread(void *arg)
     
     while (sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET) {
         ESP_LOGI(TAG, "Waiting for system time to be set... (%d)", retry);
-        vTaskDelay(2000 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
     setenv("TZ", "CET-1CEST", 1);
     tzset();
@@ -244,12 +247,19 @@ static void sntp_sync_time_thread(void *arg)
         localtime_r(&now, &timeinfo);
         strftime(strftime_buf, sizeof(strftime_buf), "%X", &timeinfo);
         ESP_LOGI(TAG, "The current date/time in Sweden is: %s", strftime_buf);
-        uint8_t* framebuffer = framebuffer_draw_string(strftime_buf, 0, 0);
+        framebuffer_clear();
+        uint8_t* framebuffer = framebuffer_draw_string(strftime_buf, 0, 0, &font_3x6);
 
         flip_dot_driver_draw(framebuffer, 14*28);
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
+
+void redraw_flip_dot(uint8_t* framebuffer)
+{
+    flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
+}
+
 
 void app_main() {
     esp_err_t ret = nvs_flash_init();
@@ -279,9 +289,11 @@ void app_main() {
     //angle_input_init(angle_callback);
 
     framebuffer_init();
-    uint8_t* framebuffer = framebuffer_draw_string("INIT", 0, 0);
-    flip_dot_driver_draw(framebuffer, 14*28);
-    xTaskCreate(sntp_sync_time_thread, "sntp_sync_time_thread", 4096, NULL, 10, NULL);
+    uint8_t* framebuffer = framebuffer_draw_string("INIT", 0, 0, &font_3x6);
+    flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
+    //xTaskCreate(sntp_sync_time_thread, "sntp_sync_time_thread", 4096, NULL, 10, NULL);
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    framebuffer_scrolling_text("THIS IS A LONG STRING TO SCROLL...", 0, 4, 200, &font_3x6, redraw_flip_dot);
 }
 
 
