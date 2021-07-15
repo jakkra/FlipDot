@@ -4,5 +4,6 @@ idf_component_register(
     "main.c"
     "flip_dot_driver.c"
     "angle_input.c"
+    "framebuffer.c"
     INCLUDE_DIRS ""
 )

@@ -16,6 +16,7 @@
 #include "flip_dot_driver.h"
 #include "angle_input.h"
 #include "esp_sntp.h"
+#include "framebuffer.h"
 
 static char TAG[] = "FlipDot";
 
@@ -226,7 +227,7 @@ static angle_event_callback* pCallback;
 static void sntp_sync_time_thread(void *arg)
 {
     time_t now;
-    uint8_t framebuffer[14][28];
+    
     char strftime_buf[64];
     struct tm timeinfo;
     int retry = 0;
@@ -239,20 +240,13 @@ static void sntp_sync_time_thread(void *arg)
     tzset();
 
     while(1) {
-        memset(framebuffer, 0, sizeof(framebuffer));
         time(&now);
         localtime_r(&now, &timeinfo);
         strftime(strftime_buf, sizeof(strftime_buf), "%X", &timeinfo);
         ESP_LOGI(TAG, "The current date/time in Sweden is: %s", strftime_buf);
+        uint8_t* framebuffer = framebuffer_draw_string(strftime_buf, 0, 0);
 
-        flip_dot_driver_print_character(strftime_buf[0] -  '0', 0, framebuffer);
-        flip_dot_driver_print_character(strftime_buf[1] -  '0', 4, framebuffer);
-        flip_dot_driver_print_character(strftime_buf[3] -  '0', 8, framebuffer);
-        flip_dot_driver_print_character(strftime_buf[4] -  '0', 12, framebuffer);
-        flip_dot_driver_print_character(strftime_buf[6] -  '0', 16, framebuffer);
-        flip_dot_driver_print_character(strftime_buf[7] -  '0', 20, framebuffer);
-
-        flip_dot_driver_draw(framebuffer, sizeof(framebuffer));
+        flip_dot_driver_draw(framebuffer, 14*28);
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
@@ -284,8 +278,10 @@ void app_main() {
     memset(frameBufferTime, 0, sizeof(frameBufferTime));
     //angle_input_init(angle_callback);
 
-    //flip_dot_driver_test();
-    xTaskCreate(sntp_sync_time_thread, "sntp_sync_time_thread", 2048, NULL, 10, NULL);
+    framebuffer_init();
+    uint8_t* framebuffer = framebuffer_draw_string("INIT", 0, 0);
+    flip_dot_driver_draw(framebuffer, 14*28);
+    xTaskCreate(sntp_sync_time_thread, "sntp_sync_time_thread", 4096, NULL, 10, NULL);
 }
 
 

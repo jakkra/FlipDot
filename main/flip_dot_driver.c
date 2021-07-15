@@ -5,7 +5,6 @@
 #include "freertos/queue.h"
 #include "esp_log.h"
 #include <string.h>
-#include "font.h"
 
 #define TAG "FLIP_DOT_DRIVER"
 
@@ -95,41 +94,6 @@ void flip_dot_driver_all_on(void)
 void flip_dot_driver_all_off(void)
 {
     send_to_flip_dot(uart_num, all_dark, sizeof(all_dark));
-}
-
-void flip_dot_driver_print_character(uint8_t character, uint8_t offset, uint8_t framebuffer[14][28])
-{
-    int row = 0;
-    int col = 0;
-    for (int i = 0; i < 14*28; i++) {
-        if (i > 0 && i % 28 == 0) {
-            row++;
-            col = 0;
-        }
-        if (col >= offset && col < offset + 3 && row < 6) {
-            if (font36[character][row][col - offset] == 1) {
-                framebuffer[row][col] = 1;
-            }
-        }
-        
-        col++;
-    }
-}
-
-void flip_dot_driver_test(void)
-{
-    uint8_t framebuffer[14][28];
-    memset(framebuffer, 0, sizeof(framebuffer));
-    
-    flip_dot_driver_print_character(0, 0, framebuffer);
-    flip_dot_driver_print_character(1, 4, framebuffer);
-    flip_dot_driver_print_character(2, 8, framebuffer);
-    flip_dot_driver_print_character(3, 12, framebuffer);
-    flip_dot_driver_print_character(4, 16, framebuffer);
-    flip_dot_driver_print_character(5, 20, framebuffer);
-    flip_dot_driver_print_character(6, 24, framebuffer);
-
-    flip_dot_driver_draw(framebuffer, sizeof(framebuffer));
 }
 
 void flip_dot_driver_draw(uint8_t* data, uint32_t len)
