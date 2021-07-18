@@ -20,6 +20,7 @@
 #include "fonts/font_3x6.h"
 #include "fonts/font_pzim3x5.h"
 #include "fonts/font_bmspa.h"
+#include "fonts/font_homespun.h"
 
 static char TAG[] = "FlipDot";
 
@@ -289,11 +290,11 @@ void app_main() {
     //angle_input_init(angle_callback);
 
     framebuffer_init();
-    uint8_t* framebuffer = framebuffer_draw_string("INIT", 0, 0, &font_3x6);
+    uint8_t* framebuffer = framebuffer_draw_string("I= N IT", 0, 0, &font_homespun_7x7);
     flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
     //xTaskCreate(sntp_sync_time_thread, "sntp_sync_time_thread", 4096, NULL, 10, NULL);
     vTaskDelay(pdMS_TO_TICKS(2000));
-    framebuffer_scrolling_text("THIS IS A LONG STRING TO SCROLL...", 0, 4, 200, &font_3x6, redraw_flip_dot);
+    //framebuffer_scrolling_text("THIS IS A LONG STRING TO SCROLL...", 0, 4, 200, &font_3x6, redraw_flip_dot);
 }
 
 

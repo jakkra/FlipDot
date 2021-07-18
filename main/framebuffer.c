@@ -4,7 +4,7 @@
 #include "esp_log.h"
 #include <esp_err.h>
 #include <string.h>
-
+#include <sys/param.h>
 
 typedef struct scroll_text_data_t {
     on_framebuffer_updated* on_update_callback;
@@ -17,7 +17,8 @@ typedef struct scroll_text_data_t {
     font_t* font;
 } scroll_text_data_t;
 
-static void drawChar(char c, uint8_t x, uint8_t y, font_t* font_container);
+static uint8_t drawChar(char c, uint8_t x, uint8_t y, font_t* font_container);
+static void getWidthOfCharacter(char c, font_t* font_container, uint8_t* left_offset, uint8_t* right_offset, uint8_t* true_width);
 static void scroll_task(void* arg);
 
 static uint8_t framebuffer[FRAMEBUFFER_HEIGHT][FRAMEBUFFER_WIDTH];
@@ -51,40 +52,15 @@ uint8_t* framebuffer_draw_string(char* str, uint8_t x, uint8_t y, font_t* font)
     uint8_t y_pos = y;
     char* str_pos = str;
 
-    // TODO detect character width for individual characters by checking like below
-    // {0x7c,0x20,0x10,0x0c,0x00,0x00,0x00} => width 4
-    // {0x00,0x00,0x74,0x54,0x54,0x00,0x00} => width 3
 
     while (*str_pos) {
-        drawChar(*str_pos++, x_pos, y_pos, font);
-        x_pos += font->font_width;
-        if (*str_pos && *str_pos != ':' && *(str_pos - 1) != ':') {
-            x_pos++;
-        }
-
-        // Until dynamic character width just make the space character less wide manually
-        if (*str_pos  && *(str_pos - 1) == ' ') {
-            x_pos -= font->font_width;
-            x_pos++;
-        }
-        if ((x_pos + font->font_width) > FRAMEBUFFER_WIDTH) {
-            // Do not draw outside of the framebuffer. Just ignore rest of str.
-            break;
-        }
+        x_pos += drawChar(*str_pos++, x_pos, y_pos, font);
+        x_pos++; // Distance between characters => 1
     }
     
-    /*x_pos = x;
-    y_pos = y + font.font_height;
-    str_pos = str;
-    while (*str_pos) {
-        drawChar(*str_pos++, x_pos, y_pos, &font);
-        x_pos += font.font_width;
-        if (*str_pos && *str_pos != ':' && *(str_pos - 1) != ':') {
-            x_pos++;
-        }
-    }*/
     return (uint8_t*)framebuffer;
 }
+
 
 esp_err_t framebuffer_scrolling_text(char* str, uint8_t x, uint8_t y, uint32_t scroll_interval_ms, font_t* font, on_framebuffer_updated* on_update)
 {
@@ -120,13 +96,22 @@ static void scroll_task(void* arg)
     }
 }
 
-
-static void drawChar(char c, uint8_t x, uint8_t y, font_t* font_container) {
+static uint8_t drawChar(char c, uint8_t x, uint8_t y, font_t* font_container) {
     uint8_t i, j;
     uint8_t width = font_container->font_width;
     uint8_t height = font_container->font_height;
     uint8_t offset = font_container->start_offset;
+    uint8_t left_offset, right_offset, true_width;
 
+    getWidthOfCharacter(c, font_container, &left_offset, &right_offset, &true_width);
+    printf(" %d - %c - %d => %d\n", left_offset, c, right_offset, true_width);
+
+    if ((x + true_width) > FRAMEBUFFER_WIDTH) {
+        // Do not draw outside of the framebuffer. Just ignore it
+        printf("No FIT %d, %d, %d\n", x, true_width, width);
+        return 0;
+    }
+    
     // Convert the character to an index
     c = c & 0x7F;
     if (c < ' ') {
@@ -137,11 +122,49 @@ static void drawChar(char c, uint8_t x, uint8_t y, font_t* font_container) {
 
     uint8_t* chr = &font_container->font[c*width];
 
-    for (j = 0; j < width; j++) {
+    for (j = left_offset; j < (width - right_offset); j++) {
         for (i = offset; i < height + offset; i++) {
             if (chr[j] & (1 << i)) {
-                framebuffer[y + i - offset][x + j] = 1;
+                framebuffer[y + i - offset][x + j - left_offset] = 1;
             }
         }
+    }
+
+    return true_width;
+}
+
+static void getWidthOfCharacter(char c, font_t* font_container, uint8_t* left_offset, uint8_t* right_offset, uint8_t* true_width) {
+    uint8_t width = font_container->font_width;
+
+    // Convert the character to an index
+    c = c & 0x7F;
+    if (c < ' ') {
+        c = 0;
+    } else {
+        c -= ' ';
+    }
+
+    uint8_t* chr = &font_container->font[c*width];
+    uint8_t last_row_empty = 0xFF;
+
+    for (int i = 0; i < width; i++) {
+        if (chr[i]) {
+            last_row_empty = MIN(last_row_empty, i);
+        }
+    }
+    *left_offset = last_row_empty;
+
+    last_row_empty = 0xFF;
+    for (int i = width - 1; i >= 0; i--) {
+        if (chr[i]) {
+            last_row_empty = MIN(last_row_empty, width - i - 1);
+        }
+    }
+    
+    *right_offset = last_row_empty;
+    if (*left_offset == 0xFF && *right_offset == 0xFF) {
+        *true_width = 1; // Empty character
+    } else {
+        *true_width = width - *left_offset - *right_offset;
     }
 }
