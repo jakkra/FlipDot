@@ -17,6 +17,7 @@
 #include "angle_input.h"
 #include "esp_sntp.h"
 #include "framebuffer.h"
+#include "fonts/font_3x5.h"
 #include "fonts/font_3x6.h"
 #include "fonts/font_pzim3x5.h"
 #include "fonts/font_bmspa.h"
@@ -249,7 +250,7 @@ static void sntp_sync_time_thread(void *arg)
         strftime(strftime_buf, sizeof(strftime_buf), "%X", &timeinfo);
         ESP_LOGI(TAG, "The current date/time in Sweden is: %s", strftime_buf);
         framebuffer_clear();
-        uint8_t* framebuffer = framebuffer_draw_string(strftime_buf, 0, 0, &font_3x6);
+        uint8_t* framebuffer = framebuffer_draw_string(strftime_buf, 0, 1, &font_3x6);
 
         flip_dot_driver_draw(framebuffer, 14*28);
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -290,11 +291,89 @@ void app_main() {
     //angle_input_init(angle_callback);
 
     framebuffer_init();
-    uint8_t* framebuffer = framebuffer_draw_string("I= N IT", 0, 0, &font_homespun_7x7);
-    flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
+    uint8_t* framebuffer = framebuffer_draw_string("ABC 1234567890", 0, 0, &font_3x5);
+    //flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
     //xTaskCreate(sntp_sync_time_thread, "sntp_sync_time_thread", 4096, NULL, 10, NULL);
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    //framebuffer_scrolling_text("THIS IS A LONG STRING TO SCROLL...", 0, 4, 200, &font_3x6, redraw_flip_dot);
+    //vTaskDelay(pdMS_TO_TICKS(2000));
+    //framebuffer_clear();
+
+    framebuffer = framebuffer_draw_string("ABC 1234567890", 0, font_3x5.font_height + 1, &font_homespun_7x7);
+    flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    framebuffer_clear();
+
+    framebuffer = framebuffer_draw_string("GHIJKLMNOPQ", 0, 0, &font_3x6);
+    framebuffer = framebuffer_draw_string("ghijklmnmopq", 0, font_3x6.font_height + 1, &font_3x6);
+    flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    framebuffer_clear();
+    framebuffer = framebuffer_draw_string("P!=NP", 0, 0, &font_homespun_7x7);
+    framebuffer = framebuffer_draw_string("P!=NP", 0, font_homespun_7x7.font_height + 1, &font_3x5);
+    flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    framebuffer_clear();
+    framebuffer = framebuffer_draw_string("XYZ", 0, 0, &font_bmspa_8x8);
+    framebuffer = framebuffer_draw_string("789", 0, font_bmspa_8x8.font_height, &font_bmspa_8x8);
+    flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    time_t now;
+    
+    char strftime_buf[64];
+    struct tm timeinfo;
+    int retry = 0;
+    
+    while (sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET) {
+        ESP_LOGI(TAG, "Waiting for system time to be set... (%d)", retry);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+    setenv("TZ", "CET-1CEST", 1);
+    tzset();
+    int i = 0;
+    while (i < 6) {
+        time(&now);
+        localtime_r(&now, &timeinfo);
+        strftime(strftime_buf, sizeof(strftime_buf), "%X", &timeinfo);
+        
+        ESP_LOGI(TAG, "The current date/time in Sweden is: %s", strftime_buf);
+        framebuffer_clear();
+        framebuffer = framebuffer_draw_string(strftime_buf, 0, 0, &font_3x6);
+
+        strftime(strftime_buf, sizeof(strftime_buf), "%A", &timeinfo);
+        framebuffer = framebuffer_draw_string(strftime_buf, 0, font_3x6.font_height + 1, &font_3x6);
+        flip_dot_driver_draw(framebuffer, 14*28);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        i++;
+    }
+
+    i = 0;
+    while (1) {
+        time(&now);
+        localtime_r(&now, &timeinfo);
+        strftime(strftime_buf, sizeof(strftime_buf), "%X", &timeinfo);
+        
+        ESP_LOGI(TAG, "The current date/time in Sweden is: %s", strftime_buf);
+        framebuffer_clear();
+        framebuffer = framebuffer_draw_string(strftime_buf, 0, 0, &font_3x6);
+
+        strftime(strftime_buf, sizeof(strftime_buf), "%R", &timeinfo);
+        if (i % 2 == 0) {
+            for (int j = 0; j < strlen(strftime_buf); j++) {
+                if (strftime_buf[j] == ':') {
+                    strftime_buf[j] = ' ';
+                }
+            }
+        }
+        framebuffer = framebuffer_draw_string(strftime_buf, 0, font_3x6.font_height + 1, &font_3x6);
+        flip_dot_driver_draw(framebuffer, 14*28);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        i++;
+    }
+
+    //framebuffer_clear();
+    //framebuffer_scrolling_text("Scrolling text looks OK...", 0, 3, 200, &font_homespun_7x7, redraw_flip_dot);
 }
 
 
