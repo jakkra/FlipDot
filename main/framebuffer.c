@@ -46,7 +46,6 @@ uint8_t* framebuffer_clear(void)
     return (uint8_t*)framebuffer;
 }
 
-
 uint8_t* framebuffer_draw_string(char* str, uint8_t x, uint8_t y, font_t* font)
 {
     uint8_t x_pos = x;
@@ -66,7 +65,6 @@ uint8_t* framebuffer_draw_string(char* str, uint8_t x, uint8_t y, font_t* font)
     
     return (uint8_t*)framebuffer;
 }
-
 
 esp_err_t framebuffer_scrolling_text(char* str, uint8_t x, uint8_t y, uint32_t scroll_interval_ms, font_t* font, on_framebuffer_updated* on_update)
 {
