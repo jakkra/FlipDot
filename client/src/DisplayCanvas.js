@@ -1,10 +1,11 @@
 import React, {Component} from 'react';
 
-import { Col, Row } from 'react-bootstrap';
+import { Col, Row, utils } from 'react-bootstrap';
 
 import Toolbar from './Toolbar';
 import {displaySize} from './config';
 import { ToastContainer, toast } from 'react-toastify';
+import 'gifler';
 
 
 const Modes = {
@@ -22,6 +23,8 @@ export default class DrawArea extends Component {
       wsOpen: false,
       wsClosing: false,
       wsConnecting: false,
+      imgWidth: 0,
+      imgHeight: 0,
     };
 
     this.width = displaySize.width;
@@ -32,8 +35,6 @@ export default class DrawArea extends Component {
       hex: "#0000FF"
     };
     this.drawWidth = 1;
-
-    this.displayChanged = false;
 
     this.handleMouseDown = this.handleMouseDown.bind(this);
     this.handleMouseMove = this.handleMouseMove.bind(this);
@@ -51,6 +52,8 @@ export default class DrawArea extends Component {
     this.drawPixel = this.drawPixel.bind(this);
     this.handleDisplayImage = this.handleDisplayImage.bind(this);
     this.handleDrawText = this.handleDrawText.bind(this);
+    this.onDrawFrame = this.onDrawFrame.bind(this);
+    this.handleImgLoad = this.handleImgLoad.bind(this);
   }
 
   componentDidMount() {
@@ -58,7 +61,7 @@ export default class DrawArea extends Component {
     window.addEventListener("resize", this.resizeCanvas);
     this.setupCanvas();
     this.resizeCanvas();
-    this.timerID = setInterval(() => this.sendCanvasData(), 2);
+    this.timerID = setInterval(() => this.sendCanvasData(), 25);
   }
 
   componentWillUnmount() {
@@ -78,7 +81,6 @@ export default class DrawArea extends Component {
     const ctx = this.refs.canvas.getContext('2d');
     ctx.fillStyle = this.drawingColor.hex;
     ctx.fillRect(Math.round(point.x), Math.round(point.y), this.drawWidth, this.drawWidth);
-    this.displayChanged = true;
   }
 
   handleMouseDown(mouseEvent) {
@@ -176,11 +178,8 @@ export default class DrawArea extends Component {
         bytearray[index++] = pixel[0];
       }
     }
-    if (this.displayChanged === true) {
       
-      this.ws.send(bytearray);
-      this.displayChanged = false;
-    }
+    this.ws.send(bytearray);
   }
 
   connect(ipAddress) {
@@ -280,7 +279,7 @@ export default class DrawArea extends Component {
 
     if (mode === Modes.DRAW) {
       this.refs.video.pause();
-      this.timerID = setInterval(() => this.sendCanvasData(), 2);
+      this.timerID = setInterval(() => this.sendCanvasData(), 25);
     } else {
       this.getVideo();
       this.refs.video.addEventListener('canplay', () => {
@@ -297,14 +296,64 @@ export default class DrawArea extends Component {
     this.drawWidth = width;
   }
 
+  onDrawFrame(ctx, frame) {
+    //frame.delay = 5;
+    //this.clearCanvas();
+    console.log(ctx.canvas.offsetWidth, ctx.canvas.offsetHeight)
+    ctx.drawImage(frame.buffer, frame.x, frame.y)
+    //ctx.canvas.width  = this.width;
+    //ctx.canvas.height = this.height;
+    //ctx.fillStyle = 'black';
+    //ctx.clearRect(0, 0, this.width, this.height);
+    //ctx.fill();
+    //console.log(this.state.imgWidth, this.state.imgHeight, this.width, this.height)
+    //ctx.drawImage(frame.buffer, 0, 0, this.state.imgWidth, this.state.imgHeight, 0, 0, this.width, this.height);
+    //const imgPixels = ctx.getImageData(0, 0, this.width, this.height);
+    //  for(let y = 0; y < imgPixels.height; y++){
+    //    for(let x = 0; x < imgPixels.width; x++){
+    //          const i = (y * 4) * imgPixels.width + x * 4;
+    //          const avg = (imgPixels.data[i] + imgPixels.data[i + 1] + imgPixels.data[i + 2]) / 3;
+    //          if (avg > (255/2)) {
+    //            imgPixels.data[i] = 255;
+    //            imgPixels.data[i + 1] = 255;
+    //            imgPixels.data[i + 2] = 255;
+    //          } else {
+    //            imgPixels.data[i] = 0;
+    //            imgPixels.data[i + 1] = 0;
+    //            imgPixels.data[i + 2] = 0;
+    //          }
+    //    }
+    //}
+    //ctx.putImageData(imgPixels, 0, 0, 0, 0, imgPixels.width, imgPixels.height);
+    this.sendCanvasData();
+  }
+
+  handleImgLoad({ target: img }) {
+    console.log("hej", img.naturalWidth , img.naturalHeight, img.src)
+    this.setState({
+      imgWidth: img.naturalWidth,
+      imgHeight: img.naturalHeight
+    });
+    window.gifler(img.src).frames(this.refs.canvas, this.onDrawFrame, true);
+  }
+
   handleDisplayImage(url) {
-    const context = this.refs.canvas.getContext('2d');
-    const image = new Image();
-    image.crossOrigin = "Anonymous";
-    image.src = url;
-    image.onload = () => {
-      context.drawImage(image, 0, 0, this.width, this.height);
-    };
+    clearInterval(this.timerID)
+    const outerThis = this;
+    if (url.endsWith(".gif")) {
+      const img = new Image();
+      img.onload = this.handleImgLoad;
+      img.src = url;
+    } else {
+      const context = this.refs.canvas.getContext('2d');
+      const image = new Image();
+      image.crossOrigin = "Anonymous";
+      image.src = url;
+      image.onload = () => {
+        context.drawImage(image, 0, 0, image.width, image.height, 0, 0, this.width, this.height);
+      };
+      this.timerID = setInterval(() => this.sendCanvasData(), 25);
+    }
   }
 
   getLines(ctx, text, maxWidth) {
@@ -341,7 +390,6 @@ export default class DrawArea extends Component {
   clearCanvas() {
     const context = this.refs.canvas.getContext('2d');
     context.clearRect(0, 0, this.width, this.height);
-    this.displayChanged = true;
   }
 
   render() {
