@@ -40,6 +40,8 @@ static Mode_t mode = MODE_REMOTE_CONTROL;
 static bool websocket_connected = false;
 static int8_t angle_buffer[2][ANGFLE_BUFFER_SIZE];
 static int angle_buffer_index = 0;
+static bool mode_changed = true;
+static char ip_addr[100] = "Waiting ip...";
 
 static void handleModeDemo(bool first_run);
 static void handleModeClock(bool first_run);
@@ -75,6 +77,11 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
+        memset(ip_addr, 0, sizeof(ip_addr));
+        snprintf(ip_addr, sizeof(ip_addr), IPSTR, IP2STR(&event->ip_info.ip));
+        if (mode == MODE_REMOTE_CONTROL) {
+            mode_changed = true; // Trigger re-draw ip addr on screen
+        }
     }
 }
 #ifdef CONFIG_WIFI_MODE_AP
@@ -142,14 +149,35 @@ static void start_station(void)
 static void handle_websocket_event(websocket_event_t event, uint8_t* data, uint32_t len) {
     if (event == WEBSOCKET_EVENT_CONNECTED) {
         websocket_connected = true;
+        // Change mode automatically when ws connects
+        mode = MODE_REMOTE_CONTROL;
+        mode_changed = true;
+        framebuffer_clear();
     } else if (event == WEBSOCKET_EVENT_DISCONNECTED) {
         websocket_connected = false;
+        if (mode == MODE_REMOTE_CONTROL) {
+            mode_changed = true; // Trigger re-draw of ip address
+        }
     } else if (event == WEBSOCKET_EVENT_DATA) {
         //printf("Got data length: %d\n", len);
-        flip_dot_driver_draw(data, len);
+        if (mode == MODE_REMOTE_CONTROL) {
+            flip_dot_driver_draw(data, len);
+        }
     } else {
         assert(false); // Unhandled
     }
+}
+
+static void handle_mode_changed(uint32_t new_mode) {
+    nvs_handle_t nvs_handle;
+
+    mode = new_mode;
+    mode_changed = true;
+
+    ESP_ERROR_CHECK(nvs_open("storage", NVS_READWRITE, &nvs_handle));
+    ESP_ERROR_CHECK(nvs_set_u32(nvs_handle, "mode", new_mode));
+    ESP_ERROR_CHECK(nvs_commit(nvs_handle));
+    nvs_close(nvs_handle);
 }
 
 static void initialise_mdns(void)
@@ -272,10 +300,10 @@ static void handleModeDemo(bool first_run)
         
         ESP_LOGI(TAG, "The current date/time in Sweden is: %s", strftime_buf);
         framebuffer_clear();
-        framebuffer = framebuffer_draw_string(strftime_buf, 0, 0, &font_3x6);
+        framebuffer = framebuffer_draw_string(strftime_buf, 0, 0, &font_3x6, false);
 
         strftime(strftime_buf, sizeof(strftime_buf), "%A", &timeinfo);
-        framebuffer = framebuffer_draw_string(strftime_buf, 0, font_3x6.font_height + 1, &font_3x6);
+        framebuffer = framebuffer_draw_string(strftime_buf, 0, font_3x6.font_height + 1, &font_3x6, false);
         flip_dot_driver_draw(framebuffer, 14*28);
         vTaskDelay(pdMS_TO_TICKS(1000));
         i++;
@@ -289,7 +317,7 @@ static void handleModeDemo(bool first_run)
         
         ESP_LOGI(TAG, "The current date/time in Sweden is: %s", strftime_buf);
         framebuffer_clear();
-        framebuffer = framebuffer_draw_string(strftime_buf, 0, 0, &font_3x6);
+        framebuffer = framebuffer_draw_string(strftime_buf, 0, 0, &font_3x6, false);
 
         strftime(strftime_buf, sizeof(strftime_buf), "%R", &timeinfo);
         if (i % 2 == 0) {
@@ -299,7 +327,7 @@ static void handleModeDemo(bool first_run)
                 }
             }
         }
-        framebuffer = framebuffer_draw_string(strftime_buf, 0, font_3x6.font_height + 1, &font_3x6);
+        framebuffer = framebuffer_draw_string(strftime_buf, 0, font_3x6.font_height + 1, &font_3x6, false);
         flip_dot_driver_draw(framebuffer, 14*28);
         vTaskDelay(pdMS_TO_TICKS(1000));
         i++;
@@ -318,10 +346,7 @@ static void handleModeClock(bool first_run)
     int retry = 0;
 
     if (first_run) {
-        while (sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET) {
-            ESP_LOGI(TAG, "Waiting for system time to be set... (%d)", retry);
-            vTaskDelay(pdMS_TO_TICKS(2000));
-        }
+        framebuffer_clear();
         setenv("TZ", "CET-1CEST", 1);
         tzset();
     }
@@ -331,7 +356,7 @@ static void handleModeClock(bool first_run)
     strftime(strftime_buf, sizeof(strftime_buf), "%X", &timeinfo);
     ESP_LOGI(TAG, "The current date/time in Sweden is: %s", strftime_buf);
     framebuffer_clear();
-    framebuffer = framebuffer_draw_string(strftime_buf, 0, 0, &font_3x6);
+    framebuffer = framebuffer_draw_string(strftime_buf, 0, 0, &font_3x6, false);
 
     flip_dot_driver_draw(framebuffer, 14*28);
     vTaskDelay(pdMS_TO_TICKS(1000));
@@ -343,7 +368,9 @@ void redraw_flip_dot(uint8_t* framebuffer)
 }
 
 void app_main() {
-    bool first_run = true;
+    uint8_t* framebuffer;
+    nvs_handle_t nvs_handle;
+
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
       ESP_ERROR_CHECK(nvs_flash_erase());
@@ -351,7 +378,15 @@ void app_main() {
     }
     ESP_ERROR_CHECK(ret);
 
-    webserver_init(&handle_websocket_event);
+    ESP_ERROR_CHECK(nvs_open("storage", NVS_READWRITE, &nvs_handle));
+
+    ret = nvs_get_u32(nvs_handle, "mode", &mode);
+    if (ret != ESP_OK) {
+        mode = MODE_REMOTE_CONTROL;
+    }
+    nvs_close(nvs_handle);
+
+    webserver_init(&handle_websocket_event, &handle_mode_changed);
 #ifdef CONFIG_WIFI_MODE_STATION
     start_station();
 #endif
@@ -374,23 +409,29 @@ void app_main() {
     framebuffer_clear();
 
     while (true) {
+        bool temp_mode_changed = mode_changed;
+        mode_changed = false;
         switch (mode) {
             case MODE_CLOCK:
-                handleModeClock(first_run);
+                handleModeClock(temp_mode_changed);
                 break;
             case MODE_SCROLL_TEXT:
-                handleModeScrollingText(first_run, "Scrolling text looks OK...");
+                handleModeScrollingText(temp_mode_changed, "Scrolling text looks OK...");
                 break;
             case MODE_REMOTE_CONTROL:
+                if (temp_mode_changed && !websocket_connected) {
+                    framebuffer_clear();
+                    framebuffer = framebuffer_draw_string(ip_addr, 0, 0, &font_3x6, true);
+                    flip_dot_driver_draw(framebuffer, 14*28);
+                }
                 vTaskDelay(pdMS_TO_TICKS(1000));
                 break;
             case MODE_DEMO:
-                handleModeDemo(first_run);
+                handleModeDemo(temp_mode_changed);
                 break;
             default:
                 break;
         }
-        first_run = false;
     }
 
 }

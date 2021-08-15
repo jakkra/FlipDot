@@ -13,6 +13,8 @@
 #define WS_SERVER_PORT          80
 #define MAX_WS_INCOMING_SIZE    28*14 // TODO don't hardcode
 #define MAX_WS_CONNECTIONS      5
+#define MAX_HTTP_RSP_LEN        128
+#define MAX_HTTP_REQ_LEN        128
 #define INVALID_FD              -1
 #define MAX_TX_BUF_SIZE         512
 
@@ -22,7 +24,8 @@ typedef struct web_server {
     bool                            running;
     uint8_t                         tx_buf[MAX_TX_BUF_SIZE];
     uint16_t                        tx_buf_len;
-    websocket_callback*             callback;
+    websocket_callback*             ws_callback;
+    mode_change_callback*           mode_callback;
     bool                            client_connected;
     esp_timer_handle_t              failsafe_timer;
     bool                            tx_in_progress;
@@ -32,6 +35,7 @@ static esp_err_t on_client_connected(httpd_handle_t hd, int sockfd);
 static void on_client_disconnect(httpd_handle_t hd, int sockfd);
 static void failsafe_timer_callback(void* arg);
 static esp_err_t ws_handler(httpd_req_t *req);
+static esp_err_t mode_change_handler(httpd_req_t *req);
 static void async_send(void *arg);
 
 static const httpd_uri_t ws = {
@@ -42,19 +46,26 @@ static const httpd_uri_t ws = {
     .is_websocket = true
 };
 
+static const httpd_uri_t mode_get = {
+    .uri       = "/mode",
+    .method    = HTTP_GET,
+    .handler   = mode_change_handler,
+};
+
 static const char *TAG = "ws_server";
 
 static web_server server;
 
 
-void webserver_init(websocket_callback* cb)
+void webserver_init(websocket_callback* ws_cb, mode_change_callback mode_cb)
 {
     memset(&server, 0, sizeof(web_server));
     server.running = false;
     ESP_LOGI(TAG, "webserver_init");
     server.handle = NULL;
     server.client_connected = false;
-    server.callback = cb;
+    server.ws_callback = ws_cb;
+    server.mode_callback = mode_cb;
 }
 
 void webserver_start(void)
@@ -73,6 +84,8 @@ void webserver_start(void)
     assert(err == ESP_OK);
 
     err = httpd_register_uri_handler(server.handle, &ws);
+    assert(err == ESP_OK);
+    err = httpd_register_uri_handler(server.handle, &mode_get);
     assert(err == ESP_OK);
 
     const esp_timer_create_args_t failsafe_timer_args = {
@@ -127,7 +140,7 @@ static esp_err_t on_client_connected(httpd_handle_t hd, int sockfd)
     server.client_connected = true;
     server.handle = hd;
     server.sockfd = sockfd;
-    server.callback(WEBSOCKET_EVENT_CONNECTED, NULL, 0);
+    server.ws_callback(WEBSOCKET_EVENT_CONNECTED, NULL, 0);
     //ESP_ERROR_CHECK(esp_timer_start_once(server.failsafe_timer, 5000 * 1000));
     return ESP_OK;
 }
@@ -141,7 +154,7 @@ static void on_client_disconnect(httpd_handle_t hd, int sockfd)
     ESP_LOGI(TAG, "WS Client disconnected");
     server.client_connected = false;
     esp_timer_stop(server.failsafe_timer);
-    server.callback(WEBSOCKET_EVENT_DISCONNECTED, NULL, 0);
+    server.ws_callback(WEBSOCKET_EVENT_DISCONNECTED, NULL, 0);
 }
 
 static void failsafe_timer_callback(void* arg)
@@ -167,7 +180,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
 
     if (packet.type == HTTPD_WS_TYPE_BINARY) {
         if (packet.len == MAX_WS_INCOMING_SIZE) {
-            server.callback(WEBSOCKET_EVENT_DATA, packet.payload, packet.len);
+            server.ws_callback(WEBSOCKET_EVENT_DATA, packet.payload, packet.len);
             if (server.client_connected) {
                 esp_timer_stop(server.failsafe_timer);
                 //ESP_ERROR_CHECK(esp_timer_start_once(server.failsafe_timer, 5000 * 1000));
@@ -179,5 +192,42 @@ static esp_err_t ws_handler(httpd_req_t *req)
         }
     }
    
+    return ESP_OK;
+}
+
+static esp_err_t mode_change_handler(httpd_req_t *req)
+{
+    char*  buf;
+    size_t buf_len;
+    char param[4];
+    char resp[MAX_HTTP_RSP_LEN];
+    uint32_t mode = -1;
+    esp_err_t status = ESP_FAIL;
+    
+    buf_len = httpd_req_get_url_query_len(req) + 1;
+    if (buf_len > 1) {
+        buf = malloc(buf_len);
+        assert(buf != NULL);
+        if (httpd_req_get_url_query_str(req, buf, buf_len) == ESP_OK) {
+            ESP_LOGI(TAG, "Found URL query => %s", buf);
+            if (httpd_query_key_value(buf, "mode", param, sizeof(param)) == ESP_OK) {
+                errno = 0;
+                mode = strtol(param, NULL, 10);
+                if (errno == 0) {
+                    status = ESP_OK;
+                }
+            }
+        }
+        free(buf);
+    }
+
+    if (status == ESP_OK) {
+        snprintf(resp, sizeof(resp), "{\"mode\": \"%d\"}", mode);
+        httpd_resp_send(req, resp, strlen(resp));
+        server.mode_callback(mode);
+    } else {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid params");
+    }
+
     return ESP_OK;
 }
