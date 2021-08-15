@@ -46,7 +46,7 @@ uint8_t* framebuffer_clear(void)
     return (uint8_t*)framebuffer;
 }
 
-uint8_t* framebuffer_draw_string(char* str, uint8_t x, uint8_t y, font_t* font)
+uint8_t* framebuffer_draw_string(char* str, uint8_t x, uint8_t y, font_t* font, bool wrap_newline)
 {
     uint8_t x_pos = x;
     uint8_t y_pos = y;
@@ -59,7 +59,13 @@ uint8_t* framebuffer_draw_string(char* str, uint8_t x, uint8_t y, font_t* font)
             x_pos +=  char_width;
             x_pos++; // Distance between characters => 1
         } else {
-            break; // Does not fit
+            if (wrap_newline) {
+                y_pos += font->font_height + 1;
+                x_pos = x;
+                str_pos--; // re-draw current char on new location
+            } else {
+                break; // Does not fit
+            }
         }
     }
     
