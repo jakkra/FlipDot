@@ -42,6 +42,7 @@ static int8_t angle_buffer[2][ANGFLE_BUFFER_SIZE];
 static int angle_buffer_index = 0;
 static bool mode_changed = true;
 static char ip_addr[100] = "Waiting ip...";
+static char scrolling_text[100] = "Scrolling text looks OK...";
 
 static void handleModeDemo(bool first_run);
 static void handleModeClock(bool first_run);
@@ -168,7 +169,7 @@ static void handle_websocket_event(websocket_event_t event, uint8_t* data, uint3
     }
 }
 
-static void handle_mode_changed(uint32_t new_mode) {
+static void handle_mode_changed(uint32_t new_mode, char* extra_arg) {
     nvs_handle_t nvs_handle;
 
     mode = new_mode;
@@ -176,6 +177,10 @@ static void handle_mode_changed(uint32_t new_mode) {
 
     ESP_ERROR_CHECK(nvs_open("storage", NVS_READWRITE, &nvs_handle));
     ESP_ERROR_CHECK(nvs_set_u32(nvs_handle, "mode", new_mode));
+    if (strlen(extra_arg) > 0) {
+        ESP_ERROR_CHECK(nvs_set_str(nvs_handle, "scroll_text", extra_arg));
+        strncpy(scrolling_text, extra_arg, sizeof(scrolling_text));
+    }
     ESP_ERROR_CHECK(nvs_commit(nvs_handle));
     nvs_close(nvs_handle);
 }
@@ -335,6 +340,7 @@ static void handleModeDemo(bool first_run)
 
     framebuffer_clear();
     framebuffer_scrolling_text("Scrolling text looks OK...", 0, 3, 200, &font_homespun_7x7, redraw_flip_dot);
+    vTaskDelay(pdMS_TO_TICKS(5000));
 }
 
 static void handleModeClock(bool first_run)
@@ -353,7 +359,7 @@ static void handleModeClock(bool first_run)
 
     time(&now);
     localtime_r(&now, &timeinfo);
-    strftime(strftime_buf, sizeof(strftime_buf), "%X", &timeinfo);
+    strftime(strftime_buf, sizeof(strftime_buf), "%R", &timeinfo);
     ESP_LOGI(TAG, "The current date/time in Sweden is: %s", strftime_buf);
     framebuffer_clear();
     framebuffer = framebuffer_draw_string(strftime_buf, 0, 0, &font_3x6, false);
@@ -370,6 +376,7 @@ void redraw_flip_dot(uint8_t* framebuffer)
 void app_main() {
     uint8_t* framebuffer;
     nvs_handle_t nvs_handle;
+    uint32_t max_len;
 
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -384,6 +391,10 @@ void app_main() {
     if (ret != ESP_OK) {
         mode = MODE_REMOTE_CONTROL;
     }
+
+    max_len = sizeof(scrolling_text);
+    nvs_get_str(nvs_handle, "scroll_text", scrolling_text, &max_len);
+
     nvs_close(nvs_handle);
 
     webserver_init(&handle_websocket_event, &handle_mode_changed);
@@ -416,7 +427,7 @@ void app_main() {
                 handleModeClock(temp_mode_changed);
                 break;
             case MODE_SCROLL_TEXT:
-                handleModeScrollingText(temp_mode_changed, "Scrolling text looks OK...");
+                handleModeScrollingText(temp_mode_changed, scrolling_text);
                 break;
             case MODE_REMOTE_CONTROL:
                 if (temp_mode_changed && !websocket_connected) {

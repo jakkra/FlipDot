@@ -199,11 +199,14 @@ static esp_err_t mode_change_handler(httpd_req_t *req)
 {
     char*  buf;
     size_t buf_len;
-    char param[4];
-    char resp[MAX_HTTP_RSP_LEN];
-    uint32_t mode = -1;
     esp_err_t status = ESP_FAIL;
-    
+    char param[4];
+    uint32_t mode = -1;
+    char resp[MAX_HTTP_RSP_LEN];
+    char text[MAX_HTTP_REQ_LEN];
+    memset(text, 0, sizeof(text));
+    memset(resp, 0, sizeof(resp));
+
     buf_len = httpd_req_get_url_query_len(req) + 1;
     if (buf_len > 1) {
         buf = malloc(buf_len);
@@ -217,6 +220,18 @@ static esp_err_t mode_change_handler(httpd_req_t *req)
                     status = ESP_OK;
                 }
             }
+            if (httpd_query_key_value(buf, "text", text, sizeof(text)) == ESP_OK) {
+                // Replace '%20' with a space as the text is sent as a query parameter
+                int len = strlen(text);
+                int numSpaces = 0;
+                for (int i = 0; i < len; i++) {
+                    if (text[i] == '%' && text[i + 1] == '2' && text[i + 2] == '0') {
+                        text[i] = ' ';
+                        memmove(&text[i + 1], &text[i + 3], len - i - 2 * numSpaces);
+                        numSpaces++;
+                    }
+                }
+            }
         }
         free(buf);
     }
@@ -224,7 +239,7 @@ static esp_err_t mode_change_handler(httpd_req_t *req)
     if (status == ESP_OK) {
         snprintf(resp, sizeof(resp), "{\"mode\": \"%d\"}", mode);
         httpd_resp_send(req, resp, strlen(resp));
-        server.mode_callback(mode);
+        server.mode_callback(mode, text);
     } else {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid params");
     }

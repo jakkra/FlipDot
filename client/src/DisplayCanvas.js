@@ -1,6 +1,6 @@
 import React, {Component} from 'react';
 
-import { Col, Row, utils } from 'react-bootstrap';
+import { Col, Row, Modal, Button, FormControl } from 'react-bootstrap';
 
 import Toolbar from './Toolbar';
 import {displaySize} from './config';
@@ -10,7 +10,6 @@ import 'gifler';
 
 const Modes = {
   DRAW: 'draw',
-  VIDEO: 'video',
 }
 
 export default class DrawArea extends Component {
@@ -25,12 +24,14 @@ export default class DrawArea extends Component {
       wsConnecting: false,
       imgWidth: 0,
       imgHeight: 0,
+      showModal: false,
+      scrollText: '',
+      ipAddress: '192.168.1.133:80'
     };
 
     this.width = displaySize.width;
     this.height = displaySize.height;
     this.type = '2d';
-    this.ip = '192.168.1.38:81';
     this.drawingColor = {
       hex: "#0000FF"
     };
@@ -42,9 +43,7 @@ export default class DrawArea extends Component {
     this.resizeCanvas = this.resizeCanvas.bind(this);
     this.sendCanvasData = this.sendCanvasData.bind(this);
     this.connect = this.connect.bind(this);
-    this.drawVideoToCanvas = this.drawVideoToCanvas.bind(this);
     this.connectDisconnectClicked = this.connectDisconnectClicked.bind(this);
-    this.getVideo = this.getVideo.bind(this);
     this.changeDisplayMode = this.changeDisplayMode.bind(this);
     this.clearCanvas = this.clearCanvas.bind(this);
     this.handleDrawColorChange = this.handleDrawColorChange.bind(this);
@@ -230,30 +229,10 @@ export default class DrawArea extends Component {
     };
   }
 
-  getVideo() {
-  navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-    .then(localMediaStream => {
-      try {
-        this.refs.video.srcObject = localMediaStream;
-      } catch (error) {
-        this.refs.video.src = window.URL.createObjectURL(localMediaStream);
-      }
-      this.refs.video.play();
-    })
-    .catch(err => {
-      toast.error('This device does not allow or support usage of webcamera.')
-      console.error(`No access to webcam`, err);
-      this.changeDisplayMode();
-    });
-  }
-
-  drawVideoToCanvas() {
-    const context = this.refs.canvas.getContext('2d');
-    context.drawImage(this.refs.video, 0, 0, this.width, this.height);
-    this.sendCanvasData();
-  }
-
   connectDisconnectClicked(ipAddress) {
+    this.setState({
+      ipAddress: ipAddress
+    });
     if (this.state.wsOpen) {
       this.setState({
         wsClosing: true,
@@ -266,26 +245,7 @@ export default class DrawArea extends Component {
   }
 
   changeDisplayMode() {
-    let mode = Modes.DRAW;
-    if (this.state.mode === Modes.DRAW) {
-      mode = Modes.VIDEO;
-    }
-    this.setState({
-      mode: mode,
-    });
-    
-    clearInterval(this.timerID);
-    this.clearCanvas();
-
-    if (mode === Modes.DRAW) {
-      this.refs.video.pause();
-      this.timerID = setInterval(() => this.sendCanvasData(), 25);
-    } else {
-      this.getVideo();
-      this.refs.video.addEventListener('canplay', () => {
-        this.timerID = setInterval(this.drawVideoToCanvas, 100);
-      });
-    }
+    this.setState({ showModal: true });
   }
 
   handleDrawColorChange(color) {
@@ -297,34 +257,7 @@ export default class DrawArea extends Component {
   }
 
   onDrawFrame(ctx, frame) {
-    //frame.delay = 5;
-    //this.clearCanvas();
-    console.log(ctx.canvas.offsetWidth, ctx.canvas.offsetHeight)
     ctx.drawImage(frame.buffer, frame.x, frame.y)
-    //ctx.canvas.width  = this.width;
-    //ctx.canvas.height = this.height;
-    //ctx.fillStyle = 'black';
-    //ctx.clearRect(0, 0, this.width, this.height);
-    //ctx.fill();
-    //console.log(this.state.imgWidth, this.state.imgHeight, this.width, this.height)
-    //ctx.drawImage(frame.buffer, 0, 0, this.state.imgWidth, this.state.imgHeight, 0, 0, this.width, this.height);
-    //const imgPixels = ctx.getImageData(0, 0, this.width, this.height);
-    //  for(let y = 0; y < imgPixels.height; y++){
-    //    for(let x = 0; x < imgPixels.width; x++){
-    //          const i = (y * 4) * imgPixels.width + x * 4;
-    //          const avg = (imgPixels.data[i] + imgPixels.data[i + 1] + imgPixels.data[i + 2]) / 3;
-    //          if (avg > (255/2)) {
-    //            imgPixels.data[i] = 255;
-    //            imgPixels.data[i + 1] = 255;
-    //            imgPixels.data[i + 2] = 255;
-    //          } else {
-    //            imgPixels.data[i] = 0;
-    //            imgPixels.data[i + 1] = 0;
-    //            imgPixels.data[i + 2] = 0;
-    //          }
-    //    }
-    //}
-    //ctx.putImageData(imgPixels, 0, 0, 0, 0, imgPixels.width, imgPixels.height);
     this.sendCanvasData();
   }
 
@@ -397,6 +330,37 @@ export default class DrawArea extends Component {
       <div className="drawArea" ref="drawArea" >
         <ToastContainer autoClose={5000} position="top-center" closeOnClick/>
         <Col className="Container">
+        <Modal show={this.state.showModal} onHide={() => this.setState({ showModal: false })}>
+          <Modal.Header closeButton>
+            <Modal.Title>Set Flip Display Mode</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            <Col>
+              <Row>
+                <FormControl
+                  type="text"
+                  title="IP address"
+                  value={this.state.ipAddress}
+                  placeholder="Display IP"
+                  onChange={(e) => this.setState({ ipAddress: e.target.value })}
+                  />
+              </Row>
+              <Row>
+                <FormControl
+                    type="text"
+                    value={this.state.scrollText}
+                    placeholder="Text to scroll"
+                    onChange={(e) => this.setState({ scrollText: e.target.value })}
+                    />
+                <Button onClick={() => {fetch(`http://${this.state.ipAddress}/mode?mode=1&text=${this.state.scrollText}`, {'mode': 'no-cors'})}}>Scrolling text</Button>
+              </Row>
+              <Row>
+                <Button onClick={() => fetch(`http://${this.state.ipAddress}/mode?mode=0`, {'mode': 'no-cors'})}>Clock</Button>
+                <Button onClick={() => fetch(`http://${this.state.ipAddress}/mode?mode=2`, {'mode': 'no-cors'})}>Remote Control</Button>
+              </Row>
+            </Col>
+          </Modal.Body>
+          </Modal>
           <Row xs={10}>
             <canvas
             ref="canvas"

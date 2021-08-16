@@ -3,7 +3,7 @@ import PropTypes from 'prop-types';
 
 import { Col, Row, Button, FormControl, OverlayTrigger, Popover } from 'react-bootstrap';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faPlay, faStop, faSpinner, faEraser, faPalette, faSync, faPen, faImage } from '@fortawesome/free-solid-svg-icons'
+import { faPlay, faStop, faSpinner, faEraser, faPalette, faCog, faPen, faImage } from '@fortawesome/free-solid-svg-icons'
 
 
 import { ChromePicker } from 'react-color';
@@ -254,7 +254,7 @@ export default class Toolbar extends React.Component {
                 bsStyle='primary'
                 onClick={this.props.onModeSwitch}
                 >
-                <FontAwesomeIcon icon={faSync} style={styles.toolbarIcon} />
+                <FontAwesomeIcon icon={faCog} style={styles.toolbarIcon} />
               </Button>
             </Col>
             <Col xs={2}>
@@ -262,7 +262,7 @@ export default class Toolbar extends React.Component {
                 bsStyle='info'
                 onClick={ this.handleOpenColorpicker }
                 >
-                <FontAwesomeIcon icon= {faPalette} style={styles.toolbarIcon} />
+                <FontAwesomeIcon icon={faPalette} style={styles.toolbarIcon} />
               </Button>
               {this.renderColorpicker()}
             </Col>

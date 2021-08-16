@@ -82,7 +82,7 @@ esp_err_t framebuffer_scrolling_text(char* str, uint8_t x, uint8_t y, uint32_t s
     scroll_data.y = y;
     scroll_data.scroll_interval = scroll_interval_ms;
     scroll_data.on_update_callback = on_update;
-    scroll_data.scrolling_text = malloc(strlen(str));
+    scroll_data.scrolling_text = malloc(strlen(str) + 1);
     strcpy(scroll_data.scrolling_text, str);
     scroll_data.current_str_index = scroll_data.scrolling_text;
     scroll_data.font = font;
