@@ -25,7 +25,6 @@
 
 static char TAG[] = "FlipDot";
 
-#define USE_STATION
 #define MAX_HTTP_RECV_BUFFER 1000
 
 typedef enum Mode_t {
@@ -49,25 +48,6 @@ static esp_err_t fetch_home_assistant_sensor_state(const char* sensor_id, uint32
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
-    switch (event_id) {
-        case WIFI_EVENT_AP_START:
-            break;
-        case WIFI_EVENT_AP_STOP:
-            break;
-        case WIFI_EVENT_AP_STACONNECTED:
-        {
-            wifi_event_ap_staconnected_t* event = (wifi_event_ap_staconnected_t*) event_data;
-            ESP_LOGW(TAG, "station "MACSTR" join, AID=%d", MAC2STR(event->mac), event->aid);
-            break;
-        }
-        case WIFI_EVENT_AP_STADISCONNECTED:
-        {
-            wifi_event_ap_stadisconnected_t* event = (wifi_event_ap_stadisconnected_t*) event_data;
-            ESP_LOGW(TAG, "station "MACSTR" leave, AID=%d", MAC2STR(event->mac), event->aid);
-            break;
-        }
-    }
-
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
@@ -83,40 +63,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         }
     }
 }
-#ifdef CONFIG_WIFI_MODE_AP
-static void start_ap(void) {
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    esp_netif_create_default_wifi_ap();
-
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL));
-
-    wifi_config_t wifi_config = {
-        .ap = {
-            .ssid = CONFIG_AP_SSID,
-            .ssid_len = strlen(CONFIG_AP_SSID),
-            .password = CONFIG_AP_PASS,
-            .max_connection = 1,
-            .authmode = WIFI_AUTH_WPA2_PSK
-        },
-    };
-    if (strlen(CONFIG_AP_PASS) == 0) {
-        wifi_config.ap.authmode = WIFI_AUTH_OPEN;
-    }
-
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
-
-    ESP_LOGI(TAG, "wifi_init_softap finished. SSID:%s password:%s", CONFIG_AP_SSID, CONFIG_AP_PASS);
-}
-#endif
-
-#ifdef CONFIG_WIFI_MODE_STATION
 static void start_station(void)
 {
     ESP_ERROR_CHECK(esp_netif_init());
@@ -143,7 +90,6 @@ static void start_station(void)
 
     ESP_LOGI(TAG, "WiFi Sta Started");
 }
-#endif
 
 static void handle_websocket_event(websocket_event_t event, uint8_t* data, uint32_t len) {
     if (event == WEBSOCKET_EVENT_CONNECTED) {
@@ -415,12 +361,8 @@ void app_main() {
     nvs_close(nvs_handle);
 
     webserver_init(&handle_websocket_event, &handle_mode_changed);
-#ifdef CONFIG_WIFI_MODE_STATION
     start_station();
-#endif
-#ifdef CONFIG_WIFI_MODE_AP
-    start_ap();
-#endif
+
     webserver_start();
     initialise_mdns();
     initialize_sntp();
