@@ -11,10 +11,10 @@
 #include "string.h"
 #include "mdns.h"
 #include "lwip/apps/netbiosns.h"
+#include "esp_http_client.h"
 
 #include "web_server.h"
 #include "flip_dot_driver.h"
-#include "angle_input.h"
 #include "esp_sntp.h"
 #include "framebuffer.h"
 #include "fonts/font_3x5.h"
@@ -26,8 +26,7 @@
 static char TAG[] = "FlipDot";
 
 #define USE_STATION
-#define ANGFLE_BUFFER_SIZE 10
-#define OLD_ANGLE_LIMIT_MS 3000
+#define MAX_HTTP_RECV_BUFFER 1000
 
 typedef enum Mode_t {
     MODE_CLOCK,
@@ -38,8 +37,6 @@ typedef enum Mode_t {
 
 static Mode_t mode = MODE_REMOTE_CONTROL;
 static bool websocket_connected = false;
-static int8_t angle_buffer[2][ANGFLE_BUFFER_SIZE];
-static int angle_buffer_index = 0;
 static bool mode_changed = true;
 static char ip_addr[100] = "Waiting ip...";
 static char scrolling_text[100] = "Scrolling text looks OK...";
@@ -47,7 +44,8 @@ static char scrolling_text[100] = "Scrolling text looks OK...";
 static void handleModeDemo(bool first_run);
 static void handleModeClock(bool first_run);
 static void handleModeScrollingText(bool first_run, char* text);
-void redraw_flip_dot(uint8_t* framebuffer);
+static void redraw_flip_dot(uint8_t* framebuffer);
+static esp_err_t fetch_home_assistant_sensor_state(const char* sensor_id, uint32_t* sensor_value);
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
@@ -160,7 +158,6 @@ static void handle_websocket_event(websocket_event_t event, uint8_t* data, uint3
             mode_changed = true; // Trigger re-draw of ip address
         }
     } else if (event == WEBSOCKET_EVENT_DATA) {
-        //printf("Got data length: %d\n", len);
         if (mode == MODE_REMOTE_CONTROL) {
             flip_dot_driver_draw(data, len);
         }
@@ -202,56 +199,6 @@ static void initialise_mdns(void)
     netbiosns_set_name("flip-dot");
 }
 
-uint32_t map(uint32_t x, uint32_t in_min, uint32_t in_max, uint32_t out_min, uint32_t out_max) {
-  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
-}
-
-
-static uint8_t frameBuffer[14][28];
-static uint32_t frameBufferTime[14][28];
-
-int cmpfunc (const void * a, const void * b) {
-   return ( *(int8_t*)a - *(int8_t*)b );
-}
-
-static void angle_callback(int8_t azimuth, int8_t elevation)
-{
-    uint32_t ms_now = esp_timer_get_time() / 1000;
-    azimuth = azimuth * -1;
-    if (azimuth > 45) {
-        azimuth = 45;
-    }
-    if (azimuth < -45) {
-        azimuth = -45;
-    }
-
-    if (elevation > 45) {
-        elevation = 45;
-    }
-    if (elevation < -45) {
-        elevation = -45;
-    }
-
-    angle_buffer[0][angle_buffer_index % ANGFLE_BUFFER_SIZE] = azimuth;
-    angle_buffer[1][angle_buffer_index % ANGFLE_BUFFER_SIZE] = elevation;
-
-    qsort(&angle_buffer[0], ANGFLE_BUFFER_SIZE, sizeof(int8_t), cmpfunc);
-    qsort(&angle_buffer[1], ANGFLE_BUFFER_SIZE, sizeof(int8_t), cmpfunc);
-    angle_buffer_index++;
-    printf("%d, %d, %d\n", ms_now, angle_buffer[0][ANGFLE_BUFFER_SIZE / 2], angle_buffer[1][ANGFLE_BUFFER_SIZE / 2]);
-    frameBuffer[map(angle_buffer[1][ANGFLE_BUFFER_SIZE / 2], -45, 45, 0, 13)][map(angle_buffer[0][ANGFLE_BUFFER_SIZE / 2], -45, 45, 0, 27)] = 1;
-    frameBufferTime[map(angle_buffer[1][ANGFLE_BUFFER_SIZE / 2], -45, 45, 0, 13)][map(angle_buffer[0][ANGFLE_BUFFER_SIZE / 2], -45, 45, 0, 27)] = ms_now;
-    flip_dot_driver_draw((uint8_t*)frameBuffer, 28 * 14);
-
-    for (int i = 0; i < 14; i++) {
-        for (int j = 0; j < 28; j++) {
-            if (frameBufferTime[i][j] + OLD_ANGLE_LIMIT_MS < ms_now) {
-                frameBuffer[i][j] = 0;
-            }
-        }
-    }
-}
-
 void time_sync_notification_cb(struct timeval *tv)
 {
     ESP_LOGI(TAG, "Notification of a time synchronization event");
@@ -268,12 +215,6 @@ static void initialize_sntp(void)
 #endif
     sntp_init();
 }
-
-#define BUF_SIZE (1024)
-
-#define UART_PORT_NUM   1
-
-static angle_event_callback* pCallback;
 
 static void handleModeScrollingText(bool first_run, char* text)
 {   
@@ -303,13 +244,12 @@ static void handleModeDemo(bool first_run)
         localtime_r(&now, &timeinfo);
         strftime(strftime_buf, sizeof(strftime_buf), "%X", &timeinfo);
         
-        ESP_LOGI(TAG, "The current date/time in Sweden is: %s", strftime_buf);
         framebuffer_clear();
         framebuffer = framebuffer_draw_string(strftime_buf, 0, 0, &font_3x6, false);
 
         strftime(strftime_buf, sizeof(strftime_buf), "%A", &timeinfo);
         framebuffer = framebuffer_draw_string(strftime_buf, 0, font_3x6.font_height + 1, &font_3x6, false);
-        flip_dot_driver_draw(framebuffer, 14*28);
+        flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
         vTaskDelay(pdMS_TO_TICKS(1000));
         i++;
     }
@@ -320,7 +260,6 @@ static void handleModeDemo(bool first_run)
         localtime_r(&now, &timeinfo);
         strftime(strftime_buf, sizeof(strftime_buf), "%X", &timeinfo);
         
-        ESP_LOGI(TAG, "The current date/time in Sweden is: %s", strftime_buf);
         framebuffer_clear();
         framebuffer = framebuffer_draw_string(strftime_buf, 0, 0, &font_3x6, false);
 
@@ -333,7 +272,7 @@ static void handleModeDemo(bool first_run)
             }
         }
         framebuffer = framebuffer_draw_string(strftime_buf, 0, font_3x6.font_height + 1, &font_3x6, false);
-        flip_dot_driver_draw(framebuffer, 14*28);
+        flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
         vTaskDelay(pdMS_TO_TICKS(1000));
         i++;
     }
@@ -349,7 +288,8 @@ static void handleModeClock(bool first_run)
     char strftime_buf[64];
     struct tm timeinfo;
     uint8_t* framebuffer;
-    int retry = 0;
+    uint32_t temperature_inside = 0;
+    esp_err_t err;
 
     if (first_run) {
         framebuffer_clear();
@@ -359,18 +299,95 @@ static void handleModeClock(bool first_run)
 
     time(&now);
     localtime_r(&now, &timeinfo);
-    strftime(strftime_buf, sizeof(strftime_buf), "%R", &timeinfo);
-    ESP_LOGI(TAG, "The current date/time in Sweden is: %s", strftime_buf);
+    if (timeinfo.tm_sec % 2 == 0) {
+        strftime(strftime_buf, sizeof(strftime_buf), "%H:%M", &timeinfo);
+    } else {
+        strftime(strftime_buf, sizeof(strftime_buf), "%H %M", &timeinfo);
+    }
     framebuffer_clear();
-    framebuffer = framebuffer_draw_string(strftime_buf, 0, 0, &font_3x6, false);
+    framebuffer = framebuffer_draw_string(strftime_buf, 0, 1, &font_3x6, false);
 
-    flip_dot_driver_draw(framebuffer, 14*28);
+    strftime(strftime_buf, sizeof(strftime_buf), "%a %d", &timeinfo);
+    framebuffer = framebuffer_draw_string(strftime_buf, 3, font_3x6.font_height + 2, &font_3x6, false);
+
+    err = fetch_home_assistant_sensor_state(CONFIG_HOME_ASSISTANT_SENSOR_ENTITY_ID, &temperature_inside);
+
+    if (err == ESP_OK) {
+        snprintf(strftime_buf, sizeof(strftime_buf), "%d", temperature_inside);
+        framebuffer = framebuffer_draw_string(strftime_buf, (FRAMEBUFFER_WIDTH - 1) - 3 * strlen(strftime_buf) - 1, 1, &font_3x6, false);
+        // Manually add a "celcius" character
+        framebuffer = framebuffer_set_pixel_value(FRAMEBUFFER_WIDTH - 1, 0, 1);
+        // Draw a line between the time and temperatuire
+        // TODO Implement framebuffer_draw_line
+        framebuffer = framebuffer_set_pixel_value(18, 0, 1);
+        framebuffer = framebuffer_set_pixel_value(18, 1, 1);
+        framebuffer = framebuffer_set_pixel_value(18, 2, 1);
+        framebuffer = framebuffer_set_pixel_value(18, 3, 1);
+        framebuffer = framebuffer_set_pixel_value(18, 4, 1);
+        framebuffer = framebuffer_set_pixel_value(18, 5, 1);
+        framebuffer = framebuffer_set_pixel_value(18, 6, 1);
+    }
+
+    flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
     vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
-void redraw_flip_dot(uint8_t* framebuffer)
+static void redraw_flip_dot(uint8_t* framebuffer)
 {
     flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
+}
+
+static esp_err_t fetch_home_assistant_sensor_state(const char* sensor_id, uint32_t* sensor_value)
+{
+    esp_err_t err = ESP_OK;
+    char *buffer = malloc(MAX_HTTP_RECV_BUFFER + 1);
+    memset(buffer, 0, MAX_HTTP_RECV_BUFFER + 1);
+    char url[200] = {0};
+
+    snprintf(url, sizeof(url), "http://%s/api/states/%s", CONFIG_HOME_ASSISTANT_IP_ADDR, sensor_id);
+    
+    esp_http_client_config_t config = {
+        .url = url,
+        .event_handler = NULL,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    esp_http_client_add_auth(client);
+    esp_http_client_set_header(client, "Authorization", CONFIG_HOME_ASSISTANT_BEARER_TOKEN);
+    
+    if (buffer == NULL) {
+        ESP_LOGE(TAG, "Cannot malloc http receive buffer");
+        return ESP_FAIL;
+    }
+ 
+    if ((err = esp_http_client_open(client, 0)) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
+        free(buffer);
+        return ESP_FAIL;
+    }
+    int content_length =  esp_http_client_fetch_headers(client);
+    int total_read_len = 0, read_len;
+    if (total_read_len < content_length && content_length <= MAX_HTTP_RECV_BUFFER) {
+        read_len = esp_http_client_read(client, buffer, content_length);
+        if (read_len <= 0) {
+            ESP_LOGE(TAG, "Error read data");
+        }
+        buffer[read_len] = 0;
+        ESP_LOGD(TAG, "read_len = %d", read_len);
+    }
+
+    char* needle = "\"median\": ";
+    if (needle != NULL) {
+        char* value_location = strstr(buffer, needle);
+        value_location += strlen(needle);
+        *sensor_value = atoi(value_location);
+    } else {
+        err = ESP_FAIL;
+    }
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    free(buffer);
+
+    return err;
 }
 
 void app_main() {
@@ -411,10 +428,6 @@ void app_main() {
     flip_dot_driver_init();
     flip_dot_driver_all_off();
     ESP_LOGW(TAG, "Started and running\n");
-    memset(angle_buffer, 0, sizeof(angle_buffer));
-    memset(frameBuffer, 0, sizeof(frameBuffer));
-    memset(frameBufferTime, 0, sizeof(frameBufferTime));
-    //angle_input_init(angle_callback);
 
     framebuffer_init();
     framebuffer_clear();
@@ -433,7 +446,7 @@ void app_main() {
                 if (temp_mode_changed && !websocket_connected) {
                     framebuffer_clear();
                     framebuffer = framebuffer_draw_string(ip_addr, 0, 0, &font_3x6, true);
-                    flip_dot_driver_draw(framebuffer, 14*28);
+                    flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
                 }
                 vTaskDelay(pdMS_TO_TICKS(1000));
                 break;

@@ -33,6 +33,18 @@ menu "FlipDot Configuration"
         help
         WiFi password (WPA or WPA2) for the car to use.
 
+    config HOME_ASSISTANT_BEARER_TOKEN
+        string "Home assistant Bearer token"
+        default ""
+    
+    config HOME_ASSISTANT_IP_ADDR
+        string "Home assistant IP"
+        default "192.168.1.65:8123"
+        
+    config HOME_ASSISTANT_SENSOR_ENTITY_ID
+        string "Home assistant temperature sensor entity id to fetch the temperature from"
+        default "sensor.ble_temperature_mi_temp_2"
+        
     config RS485_UART_PORT_NUM
         int "UART port number"
         range 0 2

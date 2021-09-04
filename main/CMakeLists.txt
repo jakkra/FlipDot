@@ -3,7 +3,6 @@ idf_component_register(
     "web_server.c"
     "main.c"
     "flip_dot_driver.c"
-    "angle_input.c"
     "framebuffer.c"
     INCLUDE_DIRS ""
 )

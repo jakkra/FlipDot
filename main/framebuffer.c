@@ -91,6 +91,12 @@ esp_err_t framebuffer_scrolling_text(char* str, uint8_t x, uint8_t y, uint32_t s
     return ESP_OK;
 }
 
+
+uint8_t* framebuffer_set_pixel_value(uint8_t x, uint8_t y, uint8_t val) {
+    framebuffer[y][x] = 1;
+    return (uint8_t*)framebuffer;
+}
+
 static void scroll_task(void* arg)
 {
     uint8_t x_pos = scroll_data.x;

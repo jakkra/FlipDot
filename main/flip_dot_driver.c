@@ -8,28 +8,9 @@
 
 #define TAG "FLIP_DOT_DRIVER"
 
-// Note: Some pins on target chip cannot be assigned for UART communication.
-// Please refer to documentation for selected board and target to configure pins using Kconfig.
-#define ECHO_TEST_TXD   (CONFIG_RS485_UART_TXD)
-#define ECHO_TEST_RXD   (CONFIG_RS485_UART_RXD)
-
-// RTS for RS485 Half-Duplex Mode manages DE/~RE
-#define ECHO_TEST_RTS   (CONFIG_RS485_UART_RTS)
-
-// CTS is not used in RS485 Half-Duplex Mode
-#define ECHO_TEST_CTS   (UART_PIN_NO_CHANGE)
-
 #define BUF_SIZE        (127)
 #define BAUD_RATE       (CONFIG_RS485_UART_BAUD_RATE)
 
-// Read packet timeout
-#define PACKET_READ_TICS        (100 / portTICK_RATE_MS)
-#define ECHO_TASK_STACK_SIZE    (2048)
-#define ECHO_TASK_PRIO          (10)
-#define ECHO_UART_PORT          (CONFIG_RS485_UART_PORT_NUM)
-
-// Timeout threshold for UART = number of symbols (~10 tics) with unchanged state on receive pin
-#define ECHO_READ_TOUT          (3) // 3.5T * 8 = 28 ticks, TOUT=3 -> ~24..33 ticks
 
 #define DATA_LENGTH             32
 
@@ -37,8 +18,7 @@ uint8_t all_bright[]= {0x80, 0x83, 0xFF, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7
 uint8_t all_dark[]= {0x80, 0x83, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x8F};
 uint8_t test[]= {0x80, 0x83, 0xFF, 0x00, 0x7F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x8F};
 
-static const int uart_num = ECHO_UART_PORT;
-
+static const int uart_num = CONFIG_RS485_UART_PORT_NUM;
 
 
 static void send_to_flip_dot(const int port, uint8_t* data, uint8_t length)
@@ -64,7 +44,7 @@ void flip_dot_driver_init(void)
 
     // Set UART log level
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
-    printf("BAUD:%d, TX PIN: %d, len: %d\n", BAUD_RATE, ECHO_TEST_TXD, sizeof(all_dark));
+    printf("BAUD:%d, TX PIN: %d, len: %d\n", BAUD_RATE, CONFIG_RS485_UART_TXD, sizeof(all_dark));
     ESP_LOGI(TAG, "Start RS485 application test and configure UART.");
 
     // Install UART driver (we don't need an event queue here)
@@ -77,13 +57,10 @@ void flip_dot_driver_init(void)
     ESP_LOGI(TAG, "UART set pins, mode and install driver.");
 
     // Set UART pins as per KConfig settings
-    ESP_ERROR_CHECK(uart_set_pin(uart_num, ECHO_TEST_TXD, UART_PIN_NO_CHANGE , UART_PIN_NO_CHANGE , UART_PIN_NO_CHANGE ));
+    ESP_ERROR_CHECK(uart_set_pin(uart_num, CONFIG_RS485_UART_TXD, UART_PIN_NO_CHANGE , UART_PIN_NO_CHANGE , UART_PIN_NO_CHANGE ));
 
     // Set RS485 half duplex mode
     ESP_ERROR_CHECK(uart_set_mode(uart_num, UART_MODE_UART ));
-
-    // Set read timeout of UART TOUT feature
-    ESP_ERROR_CHECK(uart_set_rx_timeout(uart_num, ECHO_READ_TOUT));
 }
 
 void flip_dot_driver_all_on(void)
