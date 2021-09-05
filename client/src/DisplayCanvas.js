@@ -331,12 +331,12 @@ export default class DrawArea extends Component {
         <ToastContainer autoClose={5000} position="top-center" closeOnClick/>
         <Col className="Container">
         <Modal show={this.state.showModal} onHide={() => this.setState({ showModal: false })}>
-          <Modal.Header closeButton>
-            <Modal.Title>Set Flip Display Mode</Modal.Title>
+          <Modal.Header style={{ backgroundColor: this.drawingColor.hex }} closeButton>
+            <Modal.Title style={{ color: 'white' }}>Set Flip Display Mode</Modal.Title>
           </Modal.Header>
-          <Modal.Body>
+          <Modal.Body >
             <Col>
-              <Row>
+              <Row style={{ padding: 10 }}>
                 <FormControl
                   type="text"
                   title="IP address"
@@ -345,7 +345,7 @@ export default class DrawArea extends Component {
                   onChange={(e) => this.setState({ ipAddress: e.target.value })}
                   />
               </Row>
-              <Row>
+              <Row style={{ padding: 10 }}>
                 <FormControl
                     type="text"
                     value={this.state.scrollText}
@@ -354,8 +354,8 @@ export default class DrawArea extends Component {
                     />
                 <Button onClick={() => {fetch(`http://${this.state.ipAddress}/mode?mode=1&text=${this.state.scrollText}`, {'mode': 'no-cors'})}}>Scrolling text</Button>
               </Row>
-              <Row>
-                <Button onClick={() => fetch(`http://${this.state.ipAddress}/mode?mode=0`, {'mode': 'no-cors'})}>Clock</Button>
+              <Row style={{ padding: 10 }}>
+                <Button style={{ marginRight: 10 }} onClick={() => fetch(`http://${this.state.ipAddress}/mode?mode=0`, {'mode': 'no-cors'})}>Clock</Button>
                 <Button onClick={() => fetch(`http://${this.state.ipAddress}/mode?mode=2`, {'mode': 'no-cors'})}>Remote Control</Button>
               </Row>
             </Col>
@@ -366,7 +366,7 @@ export default class DrawArea extends Component {
             ref="canvas"
             width={64}
             height={32}
-            style={{letterSpacing: 1}}
+            style={{ letterSpacing: 1 }}
             onTouchMove={this.handleMouseMove}
             onMouseDown={this.handleMouseDown}
             onMouseMove={this.handleMouseMove}/>

@@ -42,24 +42,15 @@ void flip_dot_driver_init(void)
         .source_clk = UART_SCLK_APB,
     };
 
-    // Set UART log level
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
     printf("BAUD:%d, TX PIN: %d, len: %d\n", BAUD_RATE, CONFIG_RS485_UART_TXD, sizeof(all_dark));
     ESP_LOGI(TAG, "Start RS485 application test and configure UART.");
 
-    // Install UART driver (we don't need an event queue here)
-    // In this example we don't even use a buffer for sending data.
     ESP_ERROR_CHECK(uart_driver_install(uart_num, BUF_SIZE * 2, 0, 0, NULL, 0));
-
-    // Configure UART parameters
     ESP_ERROR_CHECK(uart_param_config(uart_num, &uart_config));
 
     ESP_LOGI(TAG, "UART set pins, mode and install driver.");
-
-    // Set UART pins as per KConfig settings
     ESP_ERROR_CHECK(uart_set_pin(uart_num, CONFIG_RS485_UART_TXD, UART_PIN_NO_CHANGE , UART_PIN_NO_CHANGE , UART_PIN_NO_CHANGE ));
-
-    // Set RS485 half duplex mode
     ESP_ERROR_CHECK(uart_set_mode(uart_num, UART_MODE_UART ));
 }
 
@@ -90,18 +81,7 @@ void flip_dot_driver_draw(uint8_t* data, uint32_t len)
     buffer[1] = 0x83;
     buffer[2] = addr1;
     buffer[DATA_LENGTH - 1] = 0x8F;
-    /*
-    for (int i = 0; i < len; i++) {
-        if (i > 0 && i % 28 == 0) {
-            row++;
-            col = 0;
-            printf("\n");
-        }
-        printf("%d ", data[i]);
-        col++;
-    }
-    printf("\n\n");
-    */
+
     row = 0;
     col = 0;
     for (int i = 0; i < len; i++) {
