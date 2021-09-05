@@ -93,7 +93,7 @@ esp_err_t framebuffer_scrolling_text(char* str, uint8_t x, uint8_t y, uint32_t s
 
 
 uint8_t* framebuffer_set_pixel_value(uint8_t x, uint8_t y, uint8_t val) {
-    framebuffer[y][x] = 1;
+    framebuffer[y][x] = val;
     return (uint8_t*)framebuffer;
 }
 

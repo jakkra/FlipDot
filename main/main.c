@@ -27,11 +27,15 @@ static char TAG[] = "FlipDot";
 
 #define MAX_HTTP_RECV_BUFFER 1000
 
+#define MAINTENANCE_HOUR    02
+#define MAINTENANCE_MINUTE  30
+
 typedef enum Mode_t {
     MODE_CLOCK,
     MODE_SCROLL_TEXT,
     MODE_REMOTE_CONTROL,
-    MODE_DEMO
+    MODE_DEMO,
+    MODE_PREVENTIVE_MAINTENANCE_MODE
 } Mode_t;
 
 static Mode_t mode = MODE_REMOTE_CONTROL;
@@ -43,6 +47,7 @@ static char scrolling_text[100] = "Scrolling text looks OK...";
 static void handleModeDemo(bool first_run);
 static void handleModeClock(bool first_run);
 static void handleModeScrollingText(bool first_run, char* text);
+static void handle_preventive_maintenance(bool first_run);
 static void redraw_flip_dot(uint8_t* framebuffer);
 static esp_err_t fetch_home_assistant_sensor_state(const char* sensor_id, uint32_t* sensor_value);
 
@@ -120,7 +125,7 @@ static void handle_mode_changed(uint32_t new_mode, char* extra_arg) {
 
     ESP_ERROR_CHECK(nvs_open("storage", NVS_READWRITE, &nvs_handle));
     ESP_ERROR_CHECK(nvs_set_u32(nvs_handle, "mode", new_mode));
-    if (strlen(extra_arg) > 0) {
+    if (strlen(extra_arg) > 0 && MODE_SCROLL_TEXT) {
         ESP_ERROR_CHECK(nvs_set_str(nvs_handle, "scroll_text", extra_arg));
         strncpy(scrolling_text, extra_arg, sizeof(scrolling_text));
     }
@@ -239,8 +244,6 @@ static void handleModeClock(bool first_run)
 
     if (first_run) {
         framebuffer_clear();
-        setenv("TZ", "CET-1CEST", 1);
-        tzset();
     }
 
     time(&now);
@@ -263,7 +266,7 @@ static void handleModeClock(bool first_run)
         framebuffer = framebuffer_draw_string(strftime_buf, (FRAMEBUFFER_WIDTH - 1) - 3 * strlen(strftime_buf) - 1, 1, &font_3x6, false);
         // Manually add a "celcius" character
         framebuffer = framebuffer_set_pixel_value(FRAMEBUFFER_WIDTH - 1, 0, 1);
-        // Draw a line between the time and temperatuire
+        // Draw a line between the time and temperature
         // TODO Implement framebuffer_draw_line
         framebuffer = framebuffer_set_pixel_value(18, 0, 1);
         framebuffer = framebuffer_set_pixel_value(18, 1, 1);
@@ -276,6 +279,26 @@ static void handleModeClock(bool first_run)
 
     flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
     vTaskDelay(pdMS_TO_TICKS(1000));
+}
+
+static void handle_preventive_maintenance(bool first_run)
+{
+    uint8_t* framebuffer;
+    bool on = 0;
+
+    if (first_run) {
+        framebuffer_clear();
+    }
+    for (int iterations = 0; iterations < 2; iterations++) {
+        for (int row = 0; row < FRAMEBUFFER_HEIGHT; row++) {
+            for (int col = 0; col < FRAMEBUFFER_WIDTH; col++) {
+                framebuffer = framebuffer_set_pixel_value(col, row, on);
+                flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
+                vTaskDelay(pdMS_TO_TICKS(15));
+            }
+        }
+        on = !on;
+    }
 }
 
 static void redraw_flip_dot(uint8_t* framebuffer)
@@ -336,10 +359,34 @@ static esp_err_t fetch_home_assistant_sensor_state(const char* sensor_id, uint32
     return err;
 }
 
+static void get_time(struct tm* timeinfo) {
+    time_t now;
+    time(&now);
+    localtime_r(&now, timeinfo);
+}
+
+static Mode_t get_mode_nvs(void) {
+    Mode_t mode;
+    nvs_handle_t nvs_handle;
+    esp_err_t ret;
+
+    ESP_ERROR_CHECK(nvs_open("storage", NVS_READWRITE, &nvs_handle));
+
+    ret = nvs_get_u32(nvs_handle, "mode", &mode);
+    if (ret != ESP_OK) {
+        mode = MODE_REMOTE_CONTROL;
+    }
+
+    nvs_close(nvs_handle);
+
+    return mode;
+}
+
 void app_main() {
     uint8_t* framebuffer;
     nvs_handle_t nvs_handle;
     uint32_t max_len;
+    struct tm timeinfo;
 
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -354,7 +401,6 @@ void app_main() {
     if (ret != ESP_OK) {
         mode = MODE_REMOTE_CONTROL;
     }
-
     max_len = sizeof(scrolling_text);
     nvs_get_str(nvs_handle, "scroll_text", scrolling_text, &max_len);
 
@@ -367,6 +413,9 @@ void app_main() {
     initialise_mdns();
     initialize_sntp();
 
+    setenv("TZ", "CET-1CEST", 1);
+    tzset();
+
     flip_dot_driver_init();
     flip_dot_driver_all_off();
     ESP_LOGW(TAG, "Started and running\n");
@@ -377,6 +426,20 @@ void app_main() {
     while (true) {
         bool temp_mode_changed = mode_changed;
         mode_changed = false;
+
+        get_time(&timeinfo);
+        if (timeinfo.tm_hour == MAINTENANCE_HOUR && timeinfo.tm_min == MAINTENANCE_MINUTE) {
+            if (mode != MODE_PREVENTIVE_MAINTENANCE_MODE) {
+                temp_mode_changed = true;
+                mode = MODE_PREVENTIVE_MAINTENANCE_MODE;
+                ESP_LOGI(TAG, "Entering mainenatnce mode for one minute");
+            }
+        } else if ((timeinfo.tm_hour != MAINTENANCE_HOUR || timeinfo.tm_min != MAINTENANCE_MINUTE) && mode == MODE_PREVENTIVE_MAINTENANCE_MODE) {
+            temp_mode_changed = true;
+            mode = get_mode_nvs();
+            ESP_LOGI(TAG, "Leaving mainenatnce mode");
+        }
+
         switch (mode) {
             case MODE_CLOCK:
                 handleModeClock(temp_mode_changed);
@@ -394,6 +457,9 @@ void app_main() {
                 break;
             case MODE_DEMO:
                 handleModeDemo(temp_mode_changed);
+                break;
+            case MODE_PREVENTIVE_MAINTENANCE_MODE:
+                handle_preventive_maintenance(temp_mode_changed);
                 break;
             default:
                 break;
