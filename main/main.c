@@ -29,6 +29,7 @@ static char TAG[] = "FlipDot";
 
 #define MAINTENANCE_HOUR    02
 #define MAINTENANCE_MINUTE  30
+#define MAINTINENCE_NUM_STARTUP_FLIP 10
 
 typedef enum Mode_t {
     MODE_CLOCK,
@@ -417,7 +418,16 @@ void app_main() {
     tzset();
 
     flip_dot_driver_init();
-    flip_dot_driver_all_off();
+    // In case display has been off for a while
+    // just flip all dots a few times to make sure none
+    // are stuck.
+    for (int i = 0; i < MAINTINENCE_NUM_STARTUP_FLIP; i++) {
+        flip_dot_driver_all_on();
+        vTaskDelay(50);
+        flip_dot_driver_all_off();
+        vTaskDelay(50);
+    }
+
     ESP_LOGW(TAG, "Started and running\n");
 
     framebuffer_init();
