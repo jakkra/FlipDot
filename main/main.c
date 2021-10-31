@@ -249,6 +249,14 @@ static void handleModeClock(bool first_run)
 
     time(&now);
     localtime_r(&now, &timeinfo);
+
+    // Adjust for daylight saving time
+    if (timeinfo.tm_isdst) {
+        now = mktime(&timeinfo);
+        now -= 3600;
+        localtime_r(&now, &timeinfo);
+    }
+
     if (timeinfo.tm_sec % 2 == 0) {
         strftime(strftime_buf, sizeof(strftime_buf), "%H:%M", &timeinfo);
     } else {
