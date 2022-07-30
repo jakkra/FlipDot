@@ -330,6 +330,8 @@ static esp_err_t fetch_home_assistant_sensor_state(const char* sensor_id, uint32
     esp_http_client_handle_t client = esp_http_client_init(&config);
     esp_http_client_add_auth(client);
     esp_http_client_set_header(client, "Authorization", CONFIG_HOME_ASSISTANT_BEARER_TOKEN);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+
     
     if (buffer == NULL) {
         ESP_LOGE(TAG, "Cannot malloc http receive buffer");
@@ -352,11 +354,15 @@ static esp_err_t fetch_home_assistant_sensor_state(const char* sensor_id, uint32
         ESP_LOGD(TAG, "read_len = %d", read_len);
     }
 
-    char* needle = "\"median\": ";
+    char* needle = "\"median\":";
     if (needle != NULL) {
         char* value_location = strstr(buffer, needle);
-        value_location += strlen(needle);
-        *sensor_value = atoi(value_location);
+        if (value_location != NULL) {
+            value_location += strlen(needle);
+            *sensor_value = atoi(value_location);
+        } else {
+            err = ESP_FAIL;
+        }
     } else {
         err = ESP_FAIL;
     }
