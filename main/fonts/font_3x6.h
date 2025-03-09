@@ -1,7 +1,7 @@
 #pragma once
 #include "font.h"
 
-// Font comes from https://jared.geek.nz/2014/jan/custom-fonts-for-microcontrollers
+// Font comes from https://jared.geek.nz/2014/01/custom-fonts-for-microcontrollers/
 const uint8_t font_3_6_internal[96][3]= {
 {0x00, 0x00, 0x00}, // ' '  32
 {0x00, 0x17, 0x00}, // '!'  33

@@ -14,24 +14,24 @@ menu "FlipDot Configuration"
         string "WiFi SSID"
         default "myssid"
         help
-        SSID (network name) for the car to connect to.
+            SSID (network name) for the car to connect to.
     
     config WIFI_PASSWORD
         string "WiFi Password"
         default "mypassword"
         help
-        WiFi password (WPA or WPA2) for the car to use.
+            WiFi password (WPA or WPA2) for the car to use.
     config WIFI_SSID
         string "WiFi SSID"
         default "myssid"
         help
-        SSID (network name) for the car to connect to.
+            SSID (network name) for the car to connect to.
     
     config WIFI_PASSWORD
         string "WiFi Password"
         default "mypassword"
         help
-        WiFi password (WPA or WPA2) for the car to use.
+            WiFi password (WPA or WPA2) for the car to use.
 
     config HOME_ASSISTANT_BEARER_TOKEN
         string "Home assistant Bearer token"
@@ -45,6 +45,10 @@ menu "FlipDot Configuration"
         string "Home assistant temperature sensor entity id to fetch the temperature from"
         default "sensor.ble_temperature_mi_temp_2"
         
+    config HOME_ASSISTANT_SENSOR_ENTITY_SOLAR_PRODUCTION_ID
+        string "Home assistant current solar power photovoltaics sensor entity id."
+        default "sensor.solarnet_power_photovoltaics"
+
     config RS485_UART_PORT_NUM
         int "UART port number"
         range 0 2

@@ -72,6 +72,18 @@ uint8_t* framebuffer_draw_string(char* str, uint8_t x, uint8_t y, font_t* font, 
     return (uint8_t*)framebuffer;
 }
 
+uint8_t* framebuffer_draw_bitmap(uint8_t width, uint8_t height, const uint8_t bitmap[height][width], uint8_t x, uint8_t y, bool invert)
+{
+    for (uint8_t i = 0; i < height; i++) {
+        for (uint8_t j = 0; j < width; j++) {
+            if (x + j < FRAMEBUFFER_WIDTH && y + i < FRAMEBUFFER_HEIGHT) {
+                framebuffer[y + i][x + j] = invert ? !bitmap[i][j] : bitmap[i][j];
+            }
+        }
+    }
+    return (uint8_t*)framebuffer;
+}
+
 esp_err_t framebuffer_scrolling_text(char* str, uint8_t x, uint8_t y, uint32_t scroll_interval_ms, font_t* font, on_framebuffer_updated* on_update)
 {
     if (scroll_data.on_update_callback != NULL) {

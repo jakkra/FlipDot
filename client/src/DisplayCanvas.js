@@ -357,6 +357,7 @@ export default class DrawArea extends Component {
               <Row style={{ padding: 10 }}>
                 <Button style={{ marginRight: 10 }} onClick={() => fetch(`http://${this.state.ipAddress}/mode?mode=0`, {'mode': 'no-cors'})}>Clock</Button>
                 <Button onClick={() => fetch(`http://${this.state.ipAddress}/mode?mode=2`, {'mode': 'no-cors'})}>Remote Control</Button>
+                <Button onClick={() => fetch(`http://${this.state.ipAddress}/mode?mode=3`, {'mode': 'no-cors'})}>Solar</Button>
               </Row>
             </Col>
           </Modal.Body>

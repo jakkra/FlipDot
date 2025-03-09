@@ -31,11 +31,13 @@ static char TAG[] = "FlipDot";
 #define MAINTENANCE_HOUR    2
 #define MAINTENANCE_MINUTE  30
 
+#define DEFAULT_SOLAR_MODE_ROTATION_INTERVAL_MS 10000
+
 typedef enum Mode_t {
     MODE_CLOCK,
     MODE_SCROLL_TEXT,
     MODE_REMOTE_CONTROL,
-    MODE_DEMO,
+    MODE_SOLAR,
     MODE_PREVENTIVE_MAINTENANCE_MODE
 } Mode_t;
 
@@ -45,7 +47,7 @@ static bool mode_changed = true;
 static char ip_addr[100] = "Waiting ip...";
 static char scrolling_text[100] = "Scrolling text looks OK...";
 
-static void handleModeDemo(bool first_run);
+static void handleModeSolar(void);
 static void handleModeClock(bool first_run);
 static void handleModeScrollingText(bool first_run, char* text);
 static void handle_preventive_maintenance(bool first_run);
@@ -177,61 +179,53 @@ static void handleModeScrollingText(bool first_run, char* text)
     vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
-static void handleModeDemo(bool first_run)
+static void handleModeSolar(void)
 {   
-    time_t now;
-    
-    char strftime_buf[64];
-    struct tm timeinfo;
+    uint32_t solar_production_watt = 0;
     uint8_t* framebuffer;
-    
-    handleModeClock(true);
-    handleModeClock(false);
-    handleModeClock(false);
-    handleModeClock(false);
-
-    int i = 0;
-    while (i < 6) {
-        time(&now);
-        localtime_r(&now, &timeinfo);
-        strftime(strftime_buf, sizeof(strftime_buf), "%X", &timeinfo);
-        
-        framebuffer_clear();
-        framebuffer = framebuffer_draw_string(strftime_buf, 0, 0, &font_3x6, false);
-
-        strftime(strftime_buf, sizeof(strftime_buf), "%A", &timeinfo);
-        framebuffer = framebuffer_draw_string(strftime_buf, 0, font_3x6.font_height + 1, &font_3x6, false);
-        flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        i++;
-    }
-
-    i = 0;
-    while (i < 6) {
-        time(&now);
-        localtime_r(&now, &timeinfo);
-        strftime(strftime_buf, sizeof(strftime_buf), "%X", &timeinfo);
-        
-        framebuffer_clear();
-        framebuffer = framebuffer_draw_string(strftime_buf, 0, 0, &font_3x6, false);
-
-        strftime(strftime_buf, sizeof(strftime_buf), "%R", &timeinfo);
-        if (i % 2 == 0) {
-            for (int j = 0; j < strlen(strftime_buf); j++) {
-                if (strftime_buf[j] == ':') {
-                    strftime_buf[j] = ' ';
-                }
-            }
-        }
-        framebuffer = framebuffer_draw_string(strftime_buf, 0, font_3x6.font_height + 1, &font_3x6, false);
-        flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        i++;
-    }
+    char draw_buf[64];
 
     framebuffer_clear();
-    framebuffer_scrolling_text("Scrolling text looks OK...", 0, 3, 200, &font_homespun_7x7, redraw_flip_dot);
-    vTaskDelay(pdMS_TO_TICKS(5000));
+
+    int err = fetch_home_assistant_sensor_state(CONFIG_HOME_ASSISTANT_SENSOR_ENTITY_SOLAR_PRODUCTION_ID, &solar_production_watt);
+
+    if (err == ESP_OK && solar_production_watt > 0) {
+        snprintf(draw_buf, sizeof(draw_buf), "Now");
+        framebuffer = framebuffer_draw_string(draw_buf, 6, 1, &font_3x6, false);
+        uint32_t digit1 = solar_production_watt / 1000;
+        uint32_t digit2 = round((solar_production_watt / 100.0) - (digit1 * 10));
+        snprintf(draw_buf, sizeof(draw_buf), "%d.%dkW", digit1, digit2);
+        framebuffer = framebuffer_draw_string(draw_buf, 1, FRAMEBUFFER_HEIGHT - font_3x6.font_height, &font_3x6, false);
+
+        static const uint8_t sun_icon[9][9] = {
+            {0, 0, 0, 0, 1, 0, 0, 0, 0},
+            {0, 1, 0, 0, 0, 0, 0, 1, 0},
+            {0, 0, 0, 1, 1, 1, 0, 0, 0},
+            {0, 0, 1, 1, 1, 1, 1, 0, 0},
+            {1, 0, 1, 1, 1, 1, 1, 0, 1},
+            {0, 0, 1, 1, 1, 1, 1, 0, 0},
+            {0, 0, 0, 1, 1, 1, 0, 0, 0},
+            {0, 1, 0, 0, 0, 0, 0, 1, 0},
+            {0, 0, 0, 0, 1, 0, 0, 0, 0}
+        };
+        framebuffer = framebuffer_draw_bitmap(9, 9, sun_icon, FRAMEBUFFER_WIDTH - 9 , 0, false);
+
+        static const uint8_t electric_icon[7][5] = {
+            {0, 1, 1, 1, 1},
+            {0, 1, 1, 1, 0},
+            {1, 1, 1, 0, 0},
+            {1, 1, 1, 1, 1},
+            {0, 0, 1, 1, 0},
+            {0, 1, 1, 0, 0},
+            {0, 1, 0, 0, 0}
+        };
+        framebuffer = framebuffer_draw_bitmap(5, 7, electric_icon, 0 , 0, false);
+
+        flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    } else {
+        handleModeClock(true);
+    }
 }
 
 static void handleModeClock(bool first_run)
@@ -474,8 +468,8 @@ void app_main() {
                 }
                 vTaskDelay(pdMS_TO_TICKS(1000));
                 break;
-            case MODE_DEMO:
-                handleModeDemo(temp_mode_changed);
+            case MODE_SOLAR:
+                handleModeSolar();
                 break;
             case MODE_PREVENTIVE_MAINTENANCE_MODE:
                 handle_preventive_maintenance(temp_mode_changed);
@@ -484,7 +478,6 @@ void app_main() {
                 break;
         }
     }
-
 }
 
 
