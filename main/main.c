@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <math.h>
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -354,12 +355,12 @@ static esp_err_t fetch_home_assistant_sensor_state(const char* sensor_id, uint32
         ESP_LOGD(TAG, "read_len = %d", read_len);
     }
 
-    char* needle = "\"median\":";
+    char* needle = "\"state\":\"";
     if (needle != NULL) {
         char* value_location = strstr(buffer, needle);
         if (value_location != NULL) {
             value_location += strlen(needle);
-            *sensor_value = atoi(value_location);
+            *sensor_value = (uint32_t)round(atof(value_location));
         } else {
             err = ESP_FAIL;
         }

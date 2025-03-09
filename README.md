@@ -23,7 +23,7 @@ On the website it's possible to select mode, what text to scroll, draw in a canv
 Acrylic sheet to cover the display from dust etc. playwood backplate, some 3D printed brackets and a 3D printed stand.
 
 ## Compiling
-Follow instruction on [https://github.com/espressif/esp-idf](https://github.com/espressif/esp-idf) to set up the esp-idf, then just run `idf.py build` or use the [VSCode extension](https://github.com/espressif/vscode-esp-idf-extension). Tested with esp-idf 4.1.
+Follow instruction on [https://github.com/espressif/esp-idf](https://github.com/espressif/esp-idf) to set up the esp-idf, then just run `idf.py build` or use the [VSCode extension](https://github.com/espressif/vscode-esp-idf-extension). Tested with esp-idf 4.3.0.
 
 ### Running the website
 ```
