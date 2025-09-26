@@ -13,6 +13,7 @@
 #include "esp_wifi.h"
 #include "nvs_flash.h"
 #include "string.h"
+#include <ctype.h>
 #include <mdns.h>
 #include "lwip/apps/netbiosns.h"
 #include "esp_http_client.h"
@@ -22,6 +23,7 @@
 #include "esp_sntp.h"
 #include "esp_netif_sntp.h"
 #include "framebuffer.h"
+#include "animated_modes.h"
 #include "fonts/font_3x5.h"
 #include "fonts/font_3x6.h"
 #include "fonts/font_pzim3x5.h"
@@ -36,12 +38,16 @@ static char TAG[] = "FlipDot";
 #define MAINTENANCE_MINUTE  30
 
 typedef enum Mode_t {
-    MODE_CLOCK,
-    MODE_SCROLL_TEXT,
-    MODE_REMOTE_CONTROL,
-    MODE_SOLAR,
-    MODE_ALERT,
-    MODE_PREVENTIVE_MAINTENANCE_MODE
+    MODE_CLOCK = 0,
+    MODE_SCROLL_TEXT = 1,
+    MODE_REMOTE_CONTROL = 2,
+    MODE_SOLAR = 3,
+    MODE_ALERT = 4,
+    MODE_PREVENTIVE_MAINTENANCE_MODE = 5,
+    MODE_ANALOG_CLOCK = 6,
+    MODE_FIREFLIES_IDLE = 20,
+    MODE_CELLULAR_AUTOMATA = 21,
+    MODE_MATRIX_RAIN = 22
 } Mode_t;
 
 static Mode_t mode = MODE_REMOTE_CONTROL;
@@ -52,6 +58,27 @@ static char ip_addr[100] = "Waiting ip...";
 static char scrolling_text[100] = "Scrolling text looks OK...";
 static char alert_message[128] = {0};
 static TickType_t alert_expire_tick = 0;
+
+static const Mode_t kModeCycle[] = {
+    MODE_CLOCK,
+    MODE_SCROLL_TEXT,
+    MODE_REMOTE_CONTROL,
+    MODE_SOLAR,
+    MODE_ANALOG_CLOCK,
+    MODE_FIREFLIES_IDLE,
+    MODE_CELLULAR_AUTOMATA,
+    MODE_MATRIX_RAIN,
+};
+
+static bool mode_banner_active = false;
+static bool mode_banner_drawn = false;
+static bool mode_skip_banner_on_next_change = false;
+static TickType_t mode_banner_expire_tick = 0;
+static char mode_banner_text[32] = {0};
+static Mode_t current_display_mode = MODE_REMOTE_CONTROL;
+static bool mode_transition_pending = false;
+static bool invert_display = false;
+
 
 typedef struct {
     uint32_t temperature_inside;
@@ -84,6 +111,18 @@ static void home_assistant_poll_task(void* arg);
 static bool sensor_cache_get_temperature(uint32_t* value);
 static bool sensor_cache_get_solar(uint32_t* value);
 static void get_time(struct tm* timeinfo);
+static void start_mode_banner(Mode_t new_mode);
+static const char* mode_to_string(Mode_t mode);
+static bool mode_is_valid(Mode_t mode);
+static bool mode_is_user_selectable(Mode_t mode);
+static Mode_t normalize_mode(uint32_t stored_mode);
+static Mode_t step_mode(int direction);
+static void draw_mode_banner(void);
+static uint8_t estimate_string_width(const char* text, const font_t* font);
+static void apply_mode_selection(Mode_t requested_mode, const char* extra_arg);
+static bool parse_bool_string(const char* value, bool* out_value);
+static void apply_invert_setting(bool invert, bool persist);
+
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
@@ -135,7 +174,10 @@ static void handle_websocket_event(websocket_event_t event, uint8_t* data, uint3
     if (event == WEBSOCKET_EVENT_CONNECTED) {
         websocket_connected = true;
         // Change mode automatically when ws connects
-        mode = MODE_REMOTE_CONTROL;
+        if (mode != MODE_REMOTE_CONTROL) {
+            mode = MODE_REMOTE_CONTROL;
+            mode_transition_pending = true;
+        }
         mode_changed = true;
         framebuffer_clear();
     } else if (event == WEBSOCKET_EVENT_DISCONNECTED) {
@@ -153,32 +195,46 @@ static void handle_websocket_event(websocket_event_t event, uint8_t* data, uint3
 }
 
 static void handle_mode_changed(uint32_t new_mode, char* extra_arg) {
-    nvs_handle_t nvs_handle;
+    const char* safe_arg = (extra_arg != NULL) ? extra_arg : "";
 
-    if (new_mode == UINT32_MAX) {
-        trigger_alert(extra_arg);
+    if (new_mode == MODE_COMMAND_ALERT) {
+        trigger_alert(safe_arg);
         return;
     }
 
-    Mode_t requested_mode = (Mode_t)new_mode;
+    if (new_mode == MODE_COMMAND_SET_INVERT) {
+        bool requested_invert = false;
+        if (!parse_bool_string(safe_arg, &requested_invert)) {
+            ESP_LOGW(TAG, "Invalid invert parameter: '%s'", safe_arg);
+            return;
+        }
+
+        if (invert_display != requested_invert) {
+            apply_invert_setting(requested_invert, true);
+            ESP_LOGI(TAG, "Display inversion %s", requested_invert ? "enabled" : "disabled");
+            mode_changed = true;
+            mode_transition_pending = false;
+        }
+        return;
+    }
+
+    if (new_mode == MODE_COMMAND_NEXT || new_mode == MODE_COMMAND_PREV) {
+        int direction = (new_mode == MODE_COMMAND_NEXT) ? 1 : -1;
+        Mode_t next_mode = step_mode(direction);
+        apply_mode_selection(next_mode, NULL);
+        start_mode_banner(next_mode);
+        return;
+    }
+
+    Mode_t requested_mode = normalize_mode(new_mode);
 
     if (requested_mode == MODE_ALERT) {
-        trigger_alert(extra_arg);
+        trigger_alert(safe_arg);
         return;
     }
 
-    mode = requested_mode;
-    mode_changed = true;
-
-    ESP_ERROR_CHECK(nvs_open("storage", NVS_READWRITE, &nvs_handle));
-    ESP_ERROR_CHECK(nvs_set_u32(nvs_handle, "mode", requested_mode));
-    if (strlen(extra_arg) > 0 && requested_mode == MODE_SCROLL_TEXT) {
-        ESP_ERROR_CHECK(nvs_set_str(nvs_handle, "scroll_text", extra_arg));
-        strncpy(scrolling_text, extra_arg, sizeof(scrolling_text) - 1);
-        scrolling_text[sizeof(scrolling_text) - 1] = '\0';
-    }
-    ESP_ERROR_CHECK(nvs_commit(nvs_handle));
-    nvs_close(nvs_handle);
+    apply_mode_selection(requested_mode, safe_arg);
+    start_mode_banner(requested_mode);
 }
 
 static void trigger_alert(const char* message)
@@ -200,6 +256,7 @@ static void trigger_alert(const char* message)
     alert_expire_tick = xTaskGetTickCount() + pdMS_TO_TICKS(ALERT_DISPLAY_DURATION_MS);
     mode = MODE_ALERT;
     mode_changed = true;
+    mode_transition_pending = true;
 }
 
 static void sensor_cache_init(void)
@@ -247,6 +304,229 @@ static bool sensor_cache_get_solar(uint32_t* value)
     }
 
     return available;
+}
+
+static const char* mode_to_string(Mode_t current_mode)
+{
+    switch (current_mode) {
+        case MODE_CLOCK:
+            return "Clock Ana";
+        case MODE_SCROLL_TEXT:
+            return "Scroll";
+        case MODE_REMOTE_CONTROL:
+            return "Remote";
+        case MODE_SOLAR:
+            return "Solar";
+        case MODE_ALERT:
+            return "Alert";
+        case MODE_PREVENTIVE_MAINTENANCE_MODE:
+            return "Maintenance";
+        case MODE_ANALOG_CLOCK:
+            return "Clock Dig";
+        case MODE_FIREFLIES_IDLE:
+            return "Fireflies";
+        case MODE_CELLULAR_AUTOMATA:
+            return "Cells";
+        case MODE_MATRIX_RAIN:
+            return "Matrix";
+        default:
+            return "Mode";
+    }
+}
+
+static bool mode_is_valid(Mode_t candidate)
+{
+    switch (candidate) {
+        case MODE_CLOCK:
+        case MODE_SCROLL_TEXT:
+        case MODE_REMOTE_CONTROL:
+        case MODE_SOLAR:
+        case MODE_ALERT:
+        case MODE_PREVENTIVE_MAINTENANCE_MODE:
+        case MODE_ANALOG_CLOCK:
+        case MODE_FIREFLIES_IDLE:
+        case MODE_CELLULAR_AUTOMATA:
+        case MODE_MATRIX_RAIN:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool mode_is_user_selectable(Mode_t candidate)
+{
+    size_t count = sizeof(kModeCycle) / sizeof(kModeCycle[0]);
+    for (size_t i = 0; i < count; i++) {
+        if (kModeCycle[i] == candidate) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static Mode_t normalize_mode(uint32_t stored_mode)
+{
+    Mode_t candidate = (Mode_t)stored_mode;
+    if (!mode_is_valid(candidate)) {
+        return MODE_REMOTE_CONTROL;
+    }
+    return candidate;
+}
+
+static Mode_t step_mode(int direction)
+{
+    const size_t count = sizeof(kModeCycle) / sizeof(kModeCycle[0]);
+    Mode_t reference = mode;
+
+    if (!mode_is_user_selectable(reference)) {
+        if (mode_is_user_selectable(previous_mode)) {
+            reference = previous_mode;
+        } else {
+            reference = kModeCycle[0];
+        }
+    }
+
+    size_t index = 0;
+    bool found = false;
+    for (size_t i = 0; i < count; i++) {
+        if (kModeCycle[i] == reference) {
+            index = i;
+            found = true;
+            break;
+        }
+    }
+
+    if (!found) {
+        return kModeCycle[0];
+    }
+
+    int next_index = (int)index + direction;
+    if (next_index < 0) {
+        next_index += (int)count;
+    }
+    if (next_index >= (int)count) {
+        next_index -= (int)count;
+    }
+
+    return kModeCycle[next_index];
+}
+
+static uint8_t estimate_string_width(const char* text, const font_t* font)
+{
+    size_t length = strlen(text);
+    if (length == 0) {
+        return 0;
+    }
+    return (uint8_t)(length * (font->font_width + 1) - 1);
+}
+
+static void draw_mode_banner(void)
+{
+    font_t* font = &font_3x6;
+    uint8_t text_width = estimate_string_width(mode_banner_text, font);
+    uint8_t x = 0;
+    if (FRAMEBUFFER_WIDTH > text_width) {
+        x = (uint8_t)((FRAMEBUFFER_WIDTH - text_width) / 2);
+    }
+    uint8_t y = 0;
+    if (FRAMEBUFFER_HEIGHT > font->font_height) {
+        y = (uint8_t)((FRAMEBUFFER_HEIGHT - font->font_height) / 2);
+    }
+
+    uint8_t* framebuffer = framebuffer_clear();
+    framebuffer = framebuffer_draw_string(mode_banner_text, x, y, font, false);
+    flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
+    mode_banner_drawn = true;
+}
+
+static void start_mode_banner(Mode_t new_mode)
+{
+    const char* name = mode_to_string(new_mode);
+    snprintf(mode_banner_text, sizeof(mode_banner_text), "%s", name);
+    mode_banner_text[sizeof(mode_banner_text) - 1] = '\0';
+    mode_banner_expire_tick = xTaskGetTickCount() + pdMS_TO_TICKS(4000);
+    mode_banner_active = true;
+    mode_banner_drawn = false;
+    mode_skip_banner_on_next_change = false;
+}
+
+static void apply_mode_selection(Mode_t requested_mode, const char* extra_arg)
+{
+    nvs_handle_t nvs_handle;
+
+    mode = requested_mode;
+    mode_changed = true;
+    mode_transition_pending = true;
+
+    ESP_ERROR_CHECK(nvs_open("storage", NVS_READWRITE, &nvs_handle));
+    ESP_ERROR_CHECK(nvs_set_u32(nvs_handle, "mode", (uint32_t)requested_mode));
+
+    if (requested_mode == MODE_SCROLL_TEXT && extra_arg != NULL && extra_arg[0] != '\0') {
+        ESP_ERROR_CHECK(nvs_set_str(nvs_handle, "scroll_text", extra_arg));
+        strncpy(scrolling_text, extra_arg, sizeof(scrolling_text) - 1);
+        scrolling_text[sizeof(scrolling_text) - 1] = '\0';
+    }
+
+    ESP_ERROR_CHECK(nvs_commit(nvs_handle));
+    nvs_close(nvs_handle);
+}
+
+static bool parse_bool_string(const char* value, bool* out_value)
+{
+    if (value == NULL || out_value == NULL) {
+        return false;
+    }
+
+    size_t len = strlen(value);
+    if (len == 0) {
+        return false;
+    }
+
+    if (len == 1) {
+        if (value[0] == '1') {
+            *out_value = true;
+            return true;
+        }
+        if (value[0] == '0') {
+            *out_value = false;
+            return true;
+        }
+    }
+
+    char normalized[8];
+    if (len >= sizeof(normalized)) {
+        len = sizeof(normalized) - 1;
+    }
+    for (size_t i = 0; i < len; i++) {
+        normalized[i] = (char)tolower((unsigned char)value[i]);
+    }
+    normalized[len] = '\0';
+
+    if (strcmp(normalized, "true") == 0 || strcmp(normalized, "on") == 0 || strcmp(normalized, "yes") == 0) {
+        *out_value = true;
+        return true;
+    }
+
+    if (strcmp(normalized, "false") == 0 || strcmp(normalized, "off") == 0 || strcmp(normalized, "no") == 0) {
+        *out_value = false;
+        return true;
+    }
+
+    return false;
+}
+
+static void apply_invert_setting(bool invert, bool persist)
+{
+    invert_display = invert;
+    flip_dot_driver_set_invert(invert);
+
+    if (persist) {
+        nvs_handle_t nvs_handle;
+        ESP_ERROR_CHECK(nvs_open("storage", NVS_READWRITE, &nvs_handle));
+        ESP_ERROR_CHECK(nvs_set_u8(nvs_handle, "invert", invert ? 1 : 0));
+        ESP_ERROR_CHECK(nvs_commit(nvs_handle));
+        nvs_close(nvs_handle);
+    }
 }
 
 
@@ -553,7 +833,6 @@ static void get_time(struct tm* timeinfo) {
 }
 
 static Mode_t get_mode_nvs(void) {
-    Mode_t mode;
     nvs_handle_t nvs_handle;
     esp_err_t ret;
 
@@ -561,15 +840,14 @@ static Mode_t get_mode_nvs(void) {
 
     uint32_t stored_mode = MODE_REMOTE_CONTROL;
     ret = nvs_get_u32(nvs_handle, "mode", &stored_mode);
-    if (ret != ESP_OK) {
-        mode = MODE_REMOTE_CONTROL;
-    } else {
-        mode = (Mode_t)stored_mode;
-    }
 
     nvs_close(nvs_handle);
 
-    return mode;
+    if (ret != ESP_OK) {
+        return MODE_REMOTE_CONTROL;
+    }
+
+    return normalize_mode(stored_mode);
 }
 
 void app_main() {
@@ -590,14 +868,21 @@ void app_main() {
     uint32_t stored_mode = MODE_REMOTE_CONTROL;
     ret = nvs_get_u32(nvs_handle, "mode", &stored_mode);
     if (ret == ESP_OK) {
-        mode = (Mode_t)stored_mode;
+        mode = normalize_mode(stored_mode);
     } else {
         mode = MODE_REMOTE_CONTROL;
     }
     max_len = sizeof(scrolling_text);
     nvs_get_str(nvs_handle, "scroll_text", scrolling_text, &max_len);
 
+    uint8_t stored_invert = 0;
+    ret = nvs_get_u8(nvs_handle, "invert", &stored_invert);
+    invert_display = (ret == ESP_OK) ? (stored_invert != 0) : false;
+
     nvs_close(nvs_handle);
+
+    current_display_mode = mode;
+    mode_transition_pending = true;
 
     webserver_init(&handle_websocket_event, &handle_mode_changed);
     start_station();
@@ -610,6 +895,7 @@ void app_main() {
     tzset();
 
     flip_dot_driver_init();
+    flip_dot_driver_set_invert(invert_display);
     // In case display has been off for a while
     // just flip all dots a few times to make sure none
     // are stuck.
@@ -626,6 +912,8 @@ void app_main() {
     while (true) {
         bool temp_mode_changed = mode_changed;
         mode_changed = false;
+        bool skip_banner = mode_skip_banner_on_next_change;
+        mode_skip_banner_on_next_change = false;
 
         if (mode == MODE_ALERT && alert_expire_tick != 0) {
             TickType_t now_ticks = xTaskGetTickCount();
@@ -633,6 +921,7 @@ void app_main() {
                 framebuffer_clear();
                 mode = previous_mode;
                 mode_changed = true;
+                mode_transition_pending = true;
                 alert_expire_tick = 0;
                 continue;
             }
@@ -643,12 +932,41 @@ void app_main() {
             if (mode != MODE_PREVENTIVE_MAINTENANCE_MODE) {
                 temp_mode_changed = true;
                 mode = MODE_PREVENTIVE_MAINTENANCE_MODE;
+                mode_transition_pending = true;
                 ESP_LOGI(TAG, "Entering mainenatnce mode for one minute");
             }
         } else if ((timeinfo.tm_hour != MAINTENANCE_HOUR || timeinfo.tm_min != MAINTENANCE_MINUTE) && mode == MODE_PREVENTIVE_MAINTENANCE_MODE) {
             temp_mode_changed = true;
             mode = get_mode_nvs();
+            mode_transition_pending = true;
             ESP_LOGI(TAG, "Leaving mainenatnce mode");
+        }
+
+        if (skip_banner) {
+            temp_mode_changed = true;
+            mode_transition_pending = false;
+        }
+
+        if (temp_mode_changed && !skip_banner && mode_transition_pending) {
+            start_mode_banner(mode);
+            mode_transition_pending = false;
+        }
+
+        if (mode_banner_active) {
+            if (!mode_banner_drawn || temp_mode_changed) {
+                draw_mode_banner();
+            }
+
+            TickType_t now_ticks = xTaskGetTickCount();
+            if ((int32_t)(mode_banner_expire_tick - now_ticks) > 0) {
+                vTaskDelay(pdMS_TO_TICKS(100));
+                continue;
+            }
+
+            mode_banner_active = false;
+            mode_skip_banner_on_next_change = true;
+            mode_changed = true;
+            continue;
         }
 
         ESP_LOGI(TAG, "Mode: %d", mode);
@@ -674,6 +992,15 @@ void app_main() {
             case MODE_ANALOG_CLOCK:
                 handleModeAnalogClock(temp_mode_changed);
                 break;
+            case MODE_FIREFLIES_IDLE:
+                handleModeFirefliesIdle(temp_mode_changed);
+                break;
+            case MODE_CELLULAR_AUTOMATA:
+                handleModeCellularAutomata(temp_mode_changed);
+                break;
+            case MODE_MATRIX_RAIN:
+                handleModeMatrixRain(temp_mode_changed);
+                break;
             case MODE_ALERT:
                 handleModeAlert(temp_mode_changed);
                 break;
@@ -683,5 +1010,7 @@ void app_main() {
             default:
                 break;
         }
+
+        current_display_mode = mode;
     }
 }

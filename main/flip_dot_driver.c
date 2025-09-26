@@ -5,6 +5,7 @@
 #include "freertos/queue.h"
 #include "esp_log.h"
 #include <string.h>
+#include <stdbool.h>
 
 #define TAG "FLIP_DOT_DRIVER"
 
@@ -19,6 +20,18 @@ uint8_t all_dark[]= {0x80, 0x83, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 uint8_t test[]= {0x80, 0x83, 0xFF, 0x00, 0x7F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x8F};
 
 static const int uart_num = CONFIG_RS485_UART_PORT_NUM;
+
+static bool invert_pixels = false;
+
+void flip_dot_driver_set_invert(bool invert)
+{
+    invert_pixels = invert;
+}
+
+bool flip_dot_driver_get_invert(void)
+{
+    return invert_pixels;
+}
 
 
 static void send_to_flip_dot(const int port, uint8_t* data, uint8_t length)
@@ -89,7 +102,11 @@ void flip_dot_driver_draw(uint8_t* data, uint32_t len)
             row++;
             col = 0;
         }
-        if (data[i] != 0) {
+        bool pixel_on = (data[i] != 0);
+        if (invert_pixels) {
+            pixel_on = !pixel_on;
+        }
+        if (pixel_on) {
             if (row < 7) {
                 display1[col] |= 1 << row;
             } else {

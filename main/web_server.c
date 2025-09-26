@@ -1,4 +1,5 @@
 #include "web_server.h"
+#include "flip_dot_driver.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -10,6 +11,7 @@
 #include "esp_timer.h"
 #include "string.h"
 #include <stdint.h>
+#include <ctype.h>
 
 #define WS_SERVER_PORT          80
 #define MAX_WS_INCOMING_SIZE    28*14 // TODO don't hardcode
@@ -38,7 +40,11 @@ static void failsafe_timer_callback(void* arg);
 static esp_err_t ws_handler(httpd_req_t *req);
 static esp_err_t mode_change_handler(httpd_req_t *req);
 static esp_err_t alert_handler(httpd_req_t *req);
+static esp_err_t mode_next_handler(httpd_req_t *req);
+static esp_err_t mode_prev_handler(httpd_req_t *req);
+static esp_err_t invert_handler(httpd_req_t *req);
 static void async_send(void *arg);
+static bool parse_bool_param(const char* value, bool* out_value);
 
 static const httpd_uri_t ws = {
     .uri        = "/ws",
@@ -54,10 +60,28 @@ static const httpd_uri_t mode_get = {
     .handler   = mode_change_handler,
 };
 
+static const httpd_uri_t mode_next_get = {
+    .uri       = "/mode/next",
+    .method    = HTTP_GET,
+    .handler   = mode_next_handler,
+};
+
+static const httpd_uri_t mode_prev_get = {
+    .uri       = "/mode/prev",
+    .method    = HTTP_GET,
+    .handler   = mode_prev_handler,
+};
+
 static const httpd_uri_t alert_get = {
     .uri       = "/alert",
     .method    = HTTP_GET,
     .handler   = alert_handler,
+};
+
+static const httpd_uri_t invert_get = {
+    .uri       = "/display/invert",
+    .method    = HTTP_GET,
+    .handler   = invert_handler,
 };
 
 static const char *TAG = "ws_server";
@@ -95,7 +119,13 @@ void webserver_start(void)
     assert(err == ESP_OK);
     err = httpd_register_uri_handler(server.handle, &mode_get);
     assert(err == ESP_OK);
+    err = httpd_register_uri_handler(server.handle, &mode_next_get);
+    assert(err == ESP_OK);
+    err = httpd_register_uri_handler(server.handle, &mode_prev_get);
+    assert(err == ESP_OK);
     err = httpd_register_uri_handler(server.handle, &alert_get);
+    assert(err == ESP_OK);
+    err = httpd_register_uri_handler(server.handle, &invert_get);
     assert(err == ESP_OK);
 
     const esp_timer_create_args_t failsafe_timer_args = {
@@ -244,10 +274,114 @@ static esp_err_t alert_handler(httpd_req_t *req)
         message[sizeof(message) - 1] = '\0';
     }
 
-    server.mode_callback(UINT32_MAX, message);
+    server.mode_callback(MODE_COMMAND_ALERT, message);
 
     httpd_resp_set_type(req, "application/json");
     const char resp[] = "{\"status\":\"accepted\"}";
+    httpd_resp_send(req, resp, strlen(resp));
+    return ESP_OK;
+}
+
+static bool parse_bool_param(const char* value, bool* out_value)
+{
+    if (value == NULL || out_value == NULL) {
+        return false;
+    }
+
+    size_t len = strlen(value);
+    if (len == 0) {
+        return false;
+    }
+
+    if (len == 1) {
+        if (value[0] == '1') {
+            *out_value = true;
+            return true;
+        }
+        if (value[0] == '0') {
+            *out_value = false;
+            return true;
+        }
+    }
+
+    char lowered[8];
+    if (len >= sizeof(lowered)) {
+        len = sizeof(lowered) - 1;
+    }
+    for (size_t i = 0; i < len; i++) {
+        lowered[i] = (char)tolower((unsigned char)value[i]);
+    }
+    lowered[len] = '\0';
+
+    if (strcmp(lowered, "true") == 0 || strcmp(lowered, "on") == 0 || strcmp(lowered, "yes") == 0) {
+        *out_value = true;
+        return true;
+    }
+    if (strcmp(lowered, "false") == 0 || strcmp(lowered, "off") == 0 || strcmp(lowered, "no") == 0) {
+        *out_value = false;
+        return true;
+    }
+
+    return false;
+}
+
+static esp_err_t mode_next_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    server.mode_callback(MODE_COMMAND_NEXT, NULL);
+    const char resp[] = "{\"status\":\"accepted\"}";
+    httpd_resp_send(req, resp, strlen(resp));
+    return ESP_OK;
+}
+
+static esp_err_t mode_prev_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    server.mode_callback(MODE_COMMAND_PREV, NULL);
+    const char resp[] = "{\"status\":\"accepted\"}";
+    httpd_resp_send(req, resp, strlen(resp));
+    return ESP_OK;
+}
+
+static esp_err_t invert_handler(httpd_req_t *req)
+{
+    char enabled_param[8] = {0};
+    bool has_value = false;
+    bool requested_state = false;
+
+    size_t query_len = httpd_req_get_url_query_len(req);
+    if (query_len > 0) {
+        char query[MAX_HTTP_REQ_LEN] = {0};
+        if (query_len >= sizeof(query)) {
+            query_len = sizeof(query) - 1;
+        }
+        if (httpd_req_get_url_query_str(req, query, query_len + 1) == ESP_OK) {
+            if (httpd_query_key_value(query, "enabled", enabled_param, sizeof(enabled_param)) == ESP_OK ||
+                httpd_query_key_value(query, "value", enabled_param, sizeof(enabled_param)) == ESP_OK) {
+                has_value = true;
+                if (!parse_bool_param(enabled_param, &requested_state)) {
+                    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid enabled value");
+                    return ESP_OK;
+                }
+                enabled_param[0] = requested_state ? '1' : '0';
+                enabled_param[1] = '\0';
+            }
+        }
+    }
+
+    if (has_value) {
+        server.mode_callback(MODE_COMMAND_SET_INVERT, enabled_param);
+    } else {
+        bool new_state = !flip_dot_driver_get_invert();
+        enabled_param[0] = new_state ? '1' : '0';
+        enabled_param[1] = '\0';
+        server.mode_callback(MODE_COMMAND_SET_INVERT, enabled_param);
+    }
+
+    bool current_state = flip_dot_driver_get_invert();
+    httpd_resp_set_type(req, "application/json");
+    char resp[48];
+    snprintf(resp, sizeof(resp), "{\"inverted\":%s}", current_state ? "true" : "false");
     httpd_resp_send(req, resp, strlen(resp));
     return ESP_OK;
 }

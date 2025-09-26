@@ -237,7 +237,7 @@ uint8_t* framebuffer_draw_analog_clock(uint8_t hour, uint8_t minute, uint8_t sec
     double minute_dy = (double)minute_y - (double)cy;
     double minute_len = sqrt(minute_dx * minute_dx + minute_dy * minute_dy);
     if (minute_len > 1.0) {
-        double minute_scale = (minute_len - 1.0) / minute_len;
+        double minute_scale = 0.9 * (minute_len - 1.0) / minute_len;
         minute_x = cx + (int)round(minute_dx * minute_scale);
         minute_y = cy + (int)round(minute_dy * minute_scale);
     }

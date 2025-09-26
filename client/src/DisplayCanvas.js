@@ -359,6 +359,14 @@ export default class DrawArea extends Component {
                 <Button onClick={() => fetch(`http://${this.state.ipAddress}/mode?mode=2`, {'mode': 'no-cors'})}>Remote Control</Button>
                 <Button onClick={() => fetch(`http://${this.state.ipAddress}/mode?mode=3`, {'mode': 'no-cors'})}>Solar</Button>
               </Row>
+              <Row style={{ padding: 10 }}>
+                <Button onClick={() => fetch(`http://${this.state.ipAddress}/mode?mode=20`, {'mode': 'no-cors'})}>Fireflies idle</Button>
+              </Row>
+              <Row style={{ padding: 10 }}>
+                <Button style={{ marginRight: 10 }} onClick={() => fetch(`http://${this.state.ipAddress}/mode?mode=21`, {'mode': 'no-cors'})}>Cellular automata</Button>
+                <Button style={{ marginRight: 10 }} onClick={() => fetch(`http://${this.state.ipAddress}/mode?mode=22`, {'mode': 'no-cors'})}>Matrix rain</Button>
+                <Button onClick={() => fetch(`http://${this.state.ipAddress}/mode?mode=23`, {'mode': 'no-cors'})}>Fractal</Button>
+              </Row>
             </Col>
           </Modal.Body>
           </Modal>
@@ -392,5 +400,3 @@ export default class DrawArea extends Component {
     );
   }
 }
-
-
