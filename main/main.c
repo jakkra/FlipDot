@@ -47,7 +47,12 @@ typedef enum Mode_t {
     MODE_ANALOG_CLOCK = 6,
     MODE_FIREFLIES_IDLE = 20,
     MODE_CELLULAR_AUTOMATA = 21,
-    MODE_MATRIX_RAIN = 22
+    MODE_MATRIX_RAIN = 22,
+    MODE_RIPPLE = 23,
+    MODE_TUNNEL = 24,
+    MODE_BOUNCING_BALLS = 25,
+    MODE_TELEPORT = 26,
+    MODE_LISSAJOUS = 27
 } Mode_t;
 
 static Mode_t mode = MODE_REMOTE_CONTROL;
@@ -68,6 +73,11 @@ static const Mode_t kModeCycle[] = {
     MODE_FIREFLIES_IDLE,
     MODE_CELLULAR_AUTOMATA,
     MODE_MATRIX_RAIN,
+    MODE_RIPPLE,
+    MODE_TUNNEL,
+    MODE_BOUNCING_BALLS,
+    MODE_TELEPORT,
+    MODE_LISSAJOUS,
 };
 
 static bool mode_banner_active = false;
@@ -310,7 +320,7 @@ static const char* mode_to_string(Mode_t current_mode)
 {
     switch (current_mode) {
         case MODE_CLOCK:
-            return "Clock Ana";
+            return "Clock D";
         case MODE_SCROLL_TEXT:
             return "Scroll";
         case MODE_REMOTE_CONTROL:
@@ -322,13 +332,23 @@ static const char* mode_to_string(Mode_t current_mode)
         case MODE_PREVENTIVE_MAINTENANCE_MODE:
             return "Maintenance";
         case MODE_ANALOG_CLOCK:
-            return "Clock Dig";
+            return "Clock A";
         case MODE_FIREFLIES_IDLE:
             return "Fireflies";
         case MODE_CELLULAR_AUTOMATA:
             return "Cells";
         case MODE_MATRIX_RAIN:
             return "Matrix";
+        case MODE_RIPPLE:
+            return "Ripple";
+        case MODE_TUNNEL:
+            return "Tunnel";
+        case MODE_BOUNCING_BALLS:
+            return "Bounce";
+        case MODE_TELEPORT:
+            return "Teleport";
+        case MODE_LISSAJOUS:
+            return "Lissajous";
         default:
             return "Mode";
     }
@@ -347,6 +367,11 @@ static bool mode_is_valid(Mode_t candidate)
         case MODE_FIREFLIES_IDLE:
         case MODE_CELLULAR_AUTOMATA:
         case MODE_MATRIX_RAIN:
+        case MODE_RIPPLE:
+        case MODE_TUNNEL:
+        case MODE_BOUNCING_BALLS:
+        case MODE_TELEPORT:
+        case MODE_LISSAJOUS:
             return true;
         default:
             return false;
@@ -1000,6 +1025,21 @@ void app_main() {
                 break;
             case MODE_MATRIX_RAIN:
                 handleModeMatrixRain(temp_mode_changed);
+                break;
+            case MODE_RIPPLE:
+                handleModeRipple(temp_mode_changed);
+                break;
+            case MODE_TUNNEL:
+                handleModeTunnel(temp_mode_changed);
+                break;
+            case MODE_BOUNCING_BALLS:
+                handleModeBouncingBalls(temp_mode_changed);
+                break;
+            case MODE_TELEPORT:
+                handleModeTeleport(temp_mode_changed);
+                break;
+            case MODE_LISSAJOUS:
+                handleModeLissajous(temp_mode_changed);
                 break;
             case MODE_ALERT:
                 handleModeAlert(temp_mode_changed);

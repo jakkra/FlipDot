@@ -79,33 +79,20 @@ void flip_dot_driver_all_off(void)
 
 void flip_dot_driver_draw(uint8_t* data, uint32_t len)
 {
-    uint8_t display1[28];
-    memset(display1, 0, sizeof(display1));
-    uint8_t display2[28];
-    memset(display2, 0, sizeof(display2));
-    int row = 0;
-    int col = 0;
-    uint8_t addr1 = 0x15;
-    uint8_t addr2 = 0x17;
-
-    uint8_t buffer[DATA_LENGTH];
-    memset(buffer, 0, sizeof(buffer));
-    buffer[0] = 0x80;
-    buffer[1] = 0x83;
-    buffer[2] = addr1;
-    buffer[DATA_LENGTH - 1] = 0x8F;
-
-    row = 0;
-    col = 0;
-    for (int i = 0; i < len; i++) {
-        if (i > 0 && i % 28 == 0) {
-            row++;
-            col = 0;
-        }
-        bool pixel_on = (data[i] != 0);
-        if (invert_pixels) {
-            pixel_on = !pixel_on;
-        }
+    uint8_t display1[28] = {0};
+    uint8_t display2[28] = {0};
+    
+    uint8_t buffer[DATA_LENGTH] = {0x80, 0x83, 0x15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x8F};
+    
+    // Process pixels in chunks of 28 (one row)
+    uint32_t pixels_to_process = len < 392 ? len : 392; // 28*14 max pixels
+    
+    for (uint32_t i = 0; i < pixels_to_process; i++) {
+        uint8_t row = i / 28;
+        uint8_t col = i % 28;
+        
+        bool pixel_on = (data[i] != 0) ^ invert_pixels;
+        
         if (pixel_on) {
             if (row < 7) {
                 display1[col] |= 1 << row;
@@ -113,11 +100,14 @@ void flip_dot_driver_draw(uint8_t* data, uint32_t len)
                 display2[col] |= 1 << (row - 7);
             }
         }
-        col++;
     }
-    memcpy(&buffer[3], display1, sizeof(display1));
-    send_to_flip_dot(uart_num, buffer, sizeof(buffer));
-    buffer[2] = addr2;
-    memcpy(&buffer[3], display2, sizeof(display2));
-    send_to_flip_dot(uart_num, buffer, sizeof(buffer));
+    
+    // Send display1
+    memcpy(&buffer[3], display1, 28);
+    send_to_flip_dot(uart_num, buffer, DATA_LENGTH);
+    
+    // Send display2
+    buffer[2] = 0x17;
+    memcpy(&buffer[3], display2, 28);
+    send_to_flip_dot(uart_num, buffer, DATA_LENGTH);
 }
