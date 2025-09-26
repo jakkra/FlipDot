@@ -5,6 +5,8 @@
 #include <esp_err.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
+#include <float.h>
 #include <sys/param.h>
 
 typedef struct scroll_text_data_t {
@@ -114,6 +116,59 @@ uint8_t* framebuffer_set_pixel_value(uint8_t x, uint8_t y, uint8_t val) {
     return (uint8_t*)framebuffer;
 }
 
+static void compute_endpoint_on_framebuffer(int cx, int cy, double angle_deg, int* out_x, int* out_y)
+{
+    double rad = (angle_deg - 90.0) * (M_PI / 180.0);
+    double dx = cos(rad);
+    double dy = sin(rad);
+
+    if (fabs(dx) < 1e-9 && fabs(dy) < 1e-9) {
+        *out_x = cx;
+        *out_y = cy;
+        return;
+    }
+
+    double t_x = DBL_MAX;
+    double t_y = DBL_MAX;
+
+    if (fabs(dx) > 1e-9) {
+        if (dx > 0.0) {
+            t_x = (FRAMEBUFFER_WIDTH - 1 - cx) / dx;
+        } else {
+            t_x = (0 - cx) / dx;
+        }
+    }
+    if (fabs(dy) > 1e-9) {
+        if (dy > 0.0) {
+            t_y = (FRAMEBUFFER_HEIGHT - 1 - cy) / dy;
+        } else {
+            t_y = (0 - cy) / dy;
+        }
+    }
+
+    double t = fmin(t_x, t_y);
+    if (!isfinite(t) || t < 0.0) {
+        t = 0.0;
+    }
+
+    int x = (int)round((double)cx + dx * t);
+    int y = (int)round((double)cy + dy * t);
+
+    if (x < 0) {
+        x = 0;
+    } else if (x >= FRAMEBUFFER_WIDTH) {
+        x = FRAMEBUFFER_WIDTH - 1;
+    }
+    if (y < 0) {
+        y = 0;
+    } else if (y >= FRAMEBUFFER_HEIGHT) {
+        y = FRAMEBUFFER_HEIGHT - 1;
+    }
+
+    *out_x = x;
+    *out_y = y;
+}
+
 uint8_t* framebuffer_draw_line(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, uint8_t val)
 {
     int x = x0;
@@ -143,6 +198,53 @@ uint8_t* framebuffer_draw_line(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, u
             y += sy;
         }
     }
+
+    return (uint8_t*)framebuffer;
+}
+
+uint8_t* framebuffer_draw_analog_clock(uint8_t hour, uint8_t minute, uint8_t second, bool draw_bezel)
+{
+    const int cx = 13;
+    const int cy = 7;
+    if (draw_bezel) {
+        for (int hour_mark = 0; hour_mark < 12; hour_mark++) {
+            int marker_x = cx;
+            int marker_y = cy;
+            compute_endpoint_on_framebuffer(cx, cy, (double)hour_mark * 30.0, &marker_x, &marker_y);
+            framebuffer_set_pixel_value((uint8_t)marker_x, (uint8_t)marker_y, 1);
+        }
+    }
+
+    uint8_t hour12 = hour % 12;
+    double hour_angle_deg = 30.0 * (double)hour12 + 0.5 * (double)minute + (double)second / 120.0;
+    double minute_angle_deg = 6.0 * (double)minute + 0.1 * (double)second;
+
+    int hour_x = cx;
+    int hour_y = cy;
+    int minute_x = cx;
+    int minute_y = cy;
+
+    compute_endpoint_on_framebuffer(cx, cy, hour_angle_deg, &hour_x, &hour_y);
+    compute_endpoint_on_framebuffer(cx, cy, minute_angle_deg, &minute_x, &minute_y);
+
+    double hour_dx = (double)hour_x - (double)cx;
+    double hour_dy = (double)hour_y - (double)cy;
+    const double hour_scale = 0.65;
+    hour_x = cx + (int)round(hour_dx * hour_scale);
+    hour_y = cy + (int)round(hour_dy * hour_scale);
+
+    double minute_dx = (double)minute_x - (double)cx;
+    double minute_dy = (double)minute_y - (double)cy;
+    double minute_len = sqrt(minute_dx * minute_dx + minute_dy * minute_dy);
+    if (minute_len > 1.0) {
+        double minute_scale = (minute_len - 1.0) / minute_len;
+        minute_x = cx + (int)round(minute_dx * minute_scale);
+        minute_y = cy + (int)round(minute_dy * minute_scale);
+    }
+
+    framebuffer_draw_line((uint8_t)cx, (uint8_t)cy, (uint8_t)hour_x, (uint8_t)hour_y, 1);
+    framebuffer_draw_line((uint8_t)cx, (uint8_t)cy, (uint8_t)minute_x, (uint8_t)minute_y, 1);
+    framebuffer_set_pixel_value((uint8_t)cx, (uint8_t)cy, 1);
 
     return (uint8_t*)framebuffer;
 }

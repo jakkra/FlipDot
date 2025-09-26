@@ -72,6 +72,7 @@ static sensor_cache_t sensor_cache;
 
 static void handleModeSolar(void);
 static void handleModeClock(bool first_run);
+static void handleModeAnalogClock(bool first_run);
 static void handleModeScrollingText(bool first_run, char* text);
 static void handle_preventive_maintenance(bool first_run);
 static void handleModeAlert(bool first_run);
@@ -82,6 +83,7 @@ static void sensor_cache_init(void);
 static void home_assistant_poll_task(void* arg);
 static bool sensor_cache_get_temperature(uint32_t* value);
 static bool sensor_cache_get_solar(uint32_t* value);
+static void get_time(struct tm* timeinfo);
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
@@ -446,6 +448,19 @@ static void handleModeClock(bool first_run)
     vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
+static void handleModeAnalogClock(bool first_run)
+{
+    (void)first_run;
+    struct tm timeinfo;
+    uint8_t* framebuffer;
+
+    get_time(&timeinfo);
+    framebuffer_clear();
+    framebuffer = framebuffer_draw_analog_clock((uint8_t)timeinfo.tm_hour, (uint8_t)timeinfo.tm_min, (uint8_t)timeinfo.tm_sec, true);
+    flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+}
+
 static void handle_preventive_maintenance(bool first_run)
 {
     uint8_t* framebuffer;
@@ -655,6 +670,9 @@ void app_main() {
                 break;
             case MODE_SOLAR:
                 handleModeSolar();
+                break;
+            case MODE_ANALOG_CLOCK:
+                handleModeAnalogClock(temp_mode_changed);
                 break;
             case MODE_ALERT:
                 handleModeAlert(temp_mode_changed);

@@ -17,3 +17,4 @@ uint8_t* framebuffer_draw_bitmap(uint8_t width, uint8_t height, const uint8_t bi
 esp_err_t framebuffer_scrolling_text(char* str, uint8_t x, uint8_t y, uint32_t scroll_interval_ms, font_t* font, on_framebuffer_updated* on_update);
 uint8_t* framebuffer_set_pixel_value(uint8_t x, uint8_t y, uint8_t val);
 uint8_t* framebuffer_draw_line(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, uint8_t val);
+uint8_t* framebuffer_draw_analog_clock(uint8_t hour, uint8_t minute, uint8_t second, bool draw_bezel);
