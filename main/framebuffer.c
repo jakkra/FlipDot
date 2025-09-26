@@ -4,6 +4,7 @@
 #include "esp_log.h"
 #include <esp_err.h>
 #include <string.h>
+#include <stdlib.h>
 #include <sys/param.h>
 
 typedef struct scroll_text_data_t {
@@ -11,16 +12,17 @@ typedef struct scroll_text_data_t {
     char* scrolling_text;
     TaskHandle_t scrolling_task_handle;
     uint32_t scroll_interval;
-    uint8_t x;
-    uint8_t y;
-    char* current_str_index;
+    int16_t x;
+    int16_t y;
     font_t* font;
-    int index;
+    int16_t pixel_offset;
+    uint16_t text_width;
 } scroll_text_data_t;
 
-static uint8_t drawChar(char c, uint8_t x, uint8_t y, font_t* font_container);
+static int16_t drawChar(char c, int16_t x, int16_t y, font_t* font_container);
 static void getWidthOfCharacter(char c, font_t* font_container, uint8_t* left_offset, uint8_t* right_offset, uint8_t* true_width);
 static void scroll_task(void* arg);
+static uint16_t get_string_width(const char* str, font_t* font_container);
 
 static uint8_t framebuffer[FRAMEBUFFER_HEIGHT][FRAMEBUFFER_WIDTH];
 
@@ -41,31 +43,34 @@ uint8_t* framebuffer_clear(void)
         scroll_data.scrolling_task_handle = NULL;
         free(scroll_data.scrolling_text);
         scroll_data.on_update_callback = NULL;
+        scroll_data.scrolling_text = NULL;
+        scroll_data.pixel_offset = 0;
+        scroll_data.text_width = 0;
     }
     memset(framebuffer, 0, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
     return (uint8_t*)framebuffer;
 }
 
-uint8_t* framebuffer_draw_string(char* str, uint8_t x, uint8_t y, font_t* font, bool wrap_newline)
+uint8_t* framebuffer_draw_string(char* str, int16_t x, int16_t y, font_t* font, bool wrap_newline)
 {
-    uint8_t x_pos = x;
-    uint8_t y_pos = y;
+    int16_t x_pos = x;
+    int16_t y_pos = y;
     char* str_pos = str;
-    int8_t char_width;
+    int16_t char_width;
 
     while (*str_pos) {
+        if (wrap_newline && x_pos >= FRAMEBUFFER_WIDTH) {
+            y_pos += font->font_height + 1;
+            x_pos = x;
+            continue;
+        }
+        if (!wrap_newline && x_pos >= FRAMEBUFFER_WIDTH) {
+            break;
+        }
         char_width = drawChar(*str_pos++, x_pos, y_pos, font);
         if (char_width >= 0) {
-            x_pos +=  char_width;
+            x_pos += char_width;
             x_pos++; // Distance between characters => 1
-        } else {
-            if (wrap_newline) {
-                y_pos += font->font_height + 1;
-                x_pos = x;
-                str_pos--; // re-draw current char on new location
-            } else {
-                break; // Does not fit
-            }
         }
     }
     
@@ -90,56 +95,95 @@ esp_err_t framebuffer_scrolling_text(char* str, uint8_t x, uint8_t y, uint32_t s
         ESP_LOGE("FRAMEBUFFER", "Scrolling text already running, clear before use.");
         return ESP_FAIL;
     }
-    scroll_data.x = 0;
+    scroll_data.x = x;
     scroll_data.y = y;
     scroll_data.scroll_interval = scroll_interval_ms;
     scroll_data.on_update_callback = on_update;
     scroll_data.scrolling_text = malloc(strlen(str) + 1);
     strcpy(scroll_data.scrolling_text, str);
-    scroll_data.current_str_index = scroll_data.scrolling_text;
     scroll_data.font = font;
+    scroll_data.pixel_offset = FRAMEBUFFER_WIDTH;
+    scroll_data.text_width = get_string_width(scroll_data.scrolling_text, font);
     assert(xTaskCreate(scroll_task, "scroll_task", 2048, NULL, 10, &scroll_data.scrolling_task_handle) == pdPASS);
 
     return ESP_OK;
 }
-
 
 uint8_t* framebuffer_set_pixel_value(uint8_t x, uint8_t y, uint8_t val) {
     framebuffer[y][x] = val;
     return (uint8_t*)framebuffer;
 }
 
-static void scroll_task(void* arg)
+uint8_t* framebuffer_draw_line(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, uint8_t val)
 {
-    uint8_t x_pos = scroll_data.x;
-    uint8_t y_pos = scroll_data.y ;
-    int8_t char_width = 0;
+    int x = x0;
+    int y = y0;
+    const int target_x = x1;
+    const int target_y = y1;
+    int dx = abs(target_x - x);
+    int sx = x < target_x ? 1 : -1;
+    int dy = -abs(target_y - y);
+    int sy = y < target_y ? 1 : -1;
+    int err = dx + dy;
 
     while (1) {
-        scroll_data.index++;
-        if (scroll_data.scrolling_text[scroll_data.index] == '\0') {
-            scroll_data.index = 0;
+        if ((unsigned)x < FRAMEBUFFER_WIDTH && (unsigned)y < FRAMEBUFFER_HEIGHT) {
+            framebuffer[y][x] = val;
         }
+        if (x == target_x && y == target_y) {
+            break;
+        }
+        int e2 = err << 1;
+        if (e2 >= dy) {
+            err += dy;
+            x += sx;
+        }
+        if (e2 <= dx) {
+            err += dx;
+            y += sy;
+        }
+    }
+
+    return (uint8_t*)framebuffer;
+}
+
+static void scroll_task(void* arg)
+{
+    (void)arg;
+    int16_t y_pos = scroll_data.y;
+
+    while (1) {
         memset(framebuffer, 0, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
-        char_width = 0;
-        x_pos = scroll_data.x;
-        int i = 0;
-        while (char_width >= 0 && i < strlen(scroll_data.scrolling_text)) {
-            char_width = drawChar(scroll_data.scrolling_text[(scroll_data.index + i) % strlen(scroll_data.scrolling_text)], x_pos, y_pos, scroll_data.font);
-            if (char_width >= 0) {
-                x_pos +=  char_width;
-                x_pos++; // Distance between characters => 1
+
+        int16_t x_pos = scroll_data.pixel_offset + scroll_data.x;
+        const char* text = scroll_data.scrolling_text;
+        while (*text) {
+            int16_t width = drawChar(*text++, x_pos, y_pos, scroll_data.font);
+            if (width >= 0) {
+                x_pos += width;
+                x_pos++; // character spacing
             } else {
-                break; // Does not fit
+                break;
             }
-            i++;
         }
+
         scroll_data.on_update_callback((uint8_t*)framebuffer);
+
+        if (scroll_data.text_width == 0) {
+            vTaskDelay(pdMS_TO_TICKS(scroll_data.scroll_interval));
+            continue;
+        }
+
+        scroll_data.pixel_offset--;
+        if (scroll_data.pixel_offset < -(int16_t)scroll_data.text_width) {
+            scroll_data.pixel_offset = FRAMEBUFFER_WIDTH;
+        }
+
         vTaskDelay(pdMS_TO_TICKS(scroll_data.scroll_interval));
     }
 }
 
-static uint8_t drawChar(char c, uint8_t x, uint8_t y, font_t* font_container) {
+static int16_t drawChar(char c, int16_t x, int16_t y, font_t* font_container) {
     uint8_t i, j;
     uint8_t width = font_container->font_width;
     uint8_t height = font_container->font_height;
@@ -147,13 +191,8 @@ static uint8_t drawChar(char c, uint8_t x, uint8_t y, font_t* font_container) {
     uint8_t left_offset, right_offset, true_width;
 
     getWidthOfCharacter(c, font_container, &left_offset, &right_offset, &true_width);
-    //printf(" %d - %c - %d => %d\n", left_offset, c, right_offset, true_width);
+    int16_t advance = true_width;
 
-    if ((x + true_width) > FRAMEBUFFER_WIDTH) {
-        // Do not draw outside of the framebuffer. Just ignore it
-        return -1;
-    }
-    
     // Convert the character to an index
     c = c & 0x7F;
     if (c < ' ') {
@@ -166,13 +205,41 @@ static uint8_t drawChar(char c, uint8_t x, uint8_t y, font_t* font_container) {
 
     for (j = left_offset; j < (width - right_offset); j++) {
         for (i = offset; i < height + offset; i++) {
+            int16_t target_x = x + j - left_offset;
+            int16_t target_y = y + i - offset;
+
+            if (target_x < 0 || target_x >= FRAMEBUFFER_WIDTH) {
+                continue;
+            }
+            if (target_y < 0 || target_y >= FRAMEBUFFER_HEIGHT) {
+                continue;
+            }
             if (chr[j] & (1 << i)) {
-                framebuffer[y + i - offset][x + j - left_offset] = 1;
+                framebuffer[target_y][target_x] = 1;
             }
         }
     }
 
-    return true_width;
+    return advance;
+}
+
+static uint16_t get_string_width(const char* str, font_t* font_container)
+{
+    uint16_t width_total = 0;
+    const char* pos = str;
+    uint8_t left_offset, right_offset, true_width;
+
+    while (*pos) {
+        getWidthOfCharacter(*pos++, font_container, &left_offset, &right_offset, &true_width);
+        width_total += true_width;
+        width_total++; // spacing between characters
+    }
+
+    if (width_total > 0) {
+        width_total--; // remove trailing space
+    }
+
+    return width_total;
 }
 
 static void getWidthOfCharacter(char c, font_t* font_container, uint8_t* left_offset, uint8_t* right_offset, uint8_t* true_width) {

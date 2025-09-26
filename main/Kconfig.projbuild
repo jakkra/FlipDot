@@ -14,24 +14,13 @@ menu "FlipDot Configuration"
         string "WiFi SSID"
         default "myssid"
         help
-            SSID (network name) for the car to connect to.
-    
+            SSID (network name) for the display to connect to.
+
     config WIFI_PASSWORD
         string "WiFi Password"
         default "mypassword"
         help
-            WiFi password (WPA or WPA2) for the car to use.
-    config WIFI_SSID
-        string "WiFi SSID"
-        default "myssid"
-        help
-            SSID (network name) for the car to connect to.
-    
-    config WIFI_PASSWORD
-        string "WiFi Password"
-        default "mypassword"
-        help
-            WiFi password (WPA or WPA2) for the car to use.
+            WiFi password (WPA or WPA2) for the display to use when connecting.
 
     config HOME_ASSISTANT_BEARER_TOKEN
         string "Home assistant Bearer token"

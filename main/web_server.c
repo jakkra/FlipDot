@@ -9,6 +9,7 @@
 #include "esp_http_server.h"
 #include "esp_timer.h"
 #include "string.h"
+#include <stdint.h>
 
 #define WS_SERVER_PORT          80
 #define MAX_WS_INCOMING_SIZE    28*14 // TODO don't hardcode
@@ -36,6 +37,7 @@ static void on_client_disconnect(httpd_handle_t hd, int sockfd);
 static void failsafe_timer_callback(void* arg);
 static esp_err_t ws_handler(httpd_req_t *req);
 static esp_err_t mode_change_handler(httpd_req_t *req);
+static esp_err_t alert_handler(httpd_req_t *req);
 static void async_send(void *arg);
 
 static const httpd_uri_t ws = {
@@ -50,6 +52,12 @@ static const httpd_uri_t mode_get = {
     .uri       = "/mode",
     .method    = HTTP_GET,
     .handler   = mode_change_handler,
+};
+
+static const httpd_uri_t alert_get = {
+    .uri       = "/alert",
+    .method    = HTTP_GET,
+    .handler   = alert_handler,
 };
 
 static const char *TAG = "ws_server";
@@ -87,10 +95,13 @@ void webserver_start(void)
     assert(err == ESP_OK);
     err = httpd_register_uri_handler(server.handle, &mode_get);
     assert(err == ESP_OK);
+    err = httpd_register_uri_handler(server.handle, &alert_get);
+    assert(err == ESP_OK);
 
     const esp_timer_create_args_t failsafe_timer_args = {
             .callback = &failsafe_timer_callback,
             .arg = NULL,
+            .dispatch_method = ESP_TIMER_TASK,
             .name = "failsafe-timer"
     };
     ESP_ERROR_CHECK(esp_timer_create(&failsafe_timer_args, &server.failsafe_timer));
@@ -170,11 +181,21 @@ static esp_err_t ws_handler(httpd_req_t *req)
     httpd_ws_frame_t packet;
     
     memset(&packet, 0, sizeof(httpd_ws_frame_t));
-    packet.payload = buf;
-
-    esp_err_t ret = httpd_ws_recv_frame(req, &packet, MAX_WS_INCOMING_SIZE);
+    esp_err_t ret = httpd_ws_recv_frame(req, &packet, 0);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "httpd_ws_recv_frame failed with %d", ret);
+        return ret;
+    }
+
+    if (packet.len > MAX_WS_INCOMING_SIZE) {
+        ESP_LOGE(TAG, "Incoming WS frame too large: %u", packet.len);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    packet.payload = buf;
+    ret = httpd_ws_recv_frame(req, &packet, packet.len);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "httpd_ws_recv_frame payload read failed with %d", ret);
         return ret;
     }
 
@@ -192,6 +213,42 @@ static esp_err_t ws_handler(httpd_req_t *req)
         }
     }
    
+    return ESP_OK;
+}
+
+static esp_err_t alert_handler(httpd_req_t *req)
+{
+    char message[MAX_HTTP_REQ_LEN] = {0};
+    size_t query_len = httpd_req_get_url_query_len(req);
+
+    if (query_len > 0) {
+        char query[MAX_HTTP_REQ_LEN] = {0};
+        if (query_len >= sizeof(query)) {
+            query_len = sizeof(query) - 1;
+        }
+        if (httpd_req_get_url_query_str(req, query, query_len + 1) == ESP_OK) {
+            if (httpd_query_key_value(query, "msg", message, sizeof(message)) != ESP_OK) {
+                message[0] = '\0';
+            }
+        }
+    }
+
+    for (char* c = message; *c != '\0'; ++c) {
+        if (*c == '+') {
+            *c = ' ';
+        }
+    }
+
+    if (message[0] == '\0') {
+        strncpy(message, "Alert", sizeof(message) - 1);
+        message[sizeof(message) - 1] = '\0';
+    }
+
+    server.mode_callback(UINT32_MAX, message);
+
+    httpd_resp_set_type(req, "application/json");
+    const char resp[] = "{\"status\":\"accepted\"}";
+    httpd_resp_send(req, resp, strlen(resp));
     return ESP_OK;
 }
 
@@ -237,7 +294,7 @@ static esp_err_t mode_change_handler(httpd_req_t *req)
     }
 
     if (status == ESP_OK) {
-        snprintf(resp, sizeof(resp), "{\"mode\": \"%d\"}", mode);
+        snprintf(resp, sizeof(resp), "{\"mode\": \"%ld\"}", mode);
         httpd_resp_send(req, resp, strlen(resp));
         server.mode_callback(mode, text);
     } else {
