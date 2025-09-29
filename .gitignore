@@ -3,3 +3,8 @@ sdkconfig
 sdkconfig.old
 .vscode
 node_modules/
+dependencies.lock
+main/web_static/
+managed_components/
+sdkconfig.secret
+tools/__pycache__/
