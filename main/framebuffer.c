@@ -142,7 +142,7 @@ esp_err_t framebuffer_scrolling_text(char* str, uint8_t x, uint8_t y, uint32_t s
     scroll_data.font = font;
     scroll_data.pixel_offset = FRAMEBUFFER_WIDTH;
     scroll_data.text_width = framebuffer_get_string_width(scroll_data.scrolling_text, font);
-    assert(xTaskCreate(scroll_task, "scroll_task", 2048, NULL, 10, &scroll_data.scrolling_task_handle) == pdPASS);
+    assert(xTaskCreate(scroll_task, "scroll_task", 4096, NULL, 10, &scroll_data.scrolling_task_handle) == pdPASS);
 
     return ESP_OK;
 }

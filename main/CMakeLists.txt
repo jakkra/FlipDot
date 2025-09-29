@@ -6,6 +6,8 @@ idf_component_register(
     "animated_modes.c"
     "flip_dot_driver.c"
     "framebuffer.c"
+    "home_assistant.c"
+    "utils.c"
     INCLUDE_DIRS "."
     PRIV_REQUIRES esp_wifi esp_netif esp_http_server esp_http_client esp_timer esp_event nvs_flash driver lwip app_update
     EMBED_FILES
