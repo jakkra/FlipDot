@@ -60,7 +60,7 @@ static char TAG[] = "FlipDot";
 #define MAINTENANCE_HOUR    2
 #define MAINTENANCE_MINUTE  30
 
-#define CLOCK_WEATHER_SWAP_INTERVAL_MINUTES 1
+#define CLOCK_WEATHER_SWAP_INTERVAL_MINUTES 10
 
 typedef enum Mode_t {
     MODE_CLOCK = 0,
@@ -644,7 +644,7 @@ static void start_mode_banner(Mode_t new_mode)
     const char* name = mode_to_string(new_mode);
     snprintf(mode_banner_text, sizeof(mode_banner_text), "%s", name);
     mode_banner_text[sizeof(mode_banner_text) - 1] = '\0';
-    mode_banner_expire_tick = xTaskGetTickCount() + pdMS_TO_TICKS(4000);
+    mode_banner_expire_tick = xTaskGetTickCount() + pdMS_TO_TICKS(3000);
     mode_banner_active = true;
     mode_banner_drawn = false;
     mode_skip_banner_on_next_change = false;
@@ -1071,6 +1071,7 @@ static void handleModeClockWeather(bool first_run)
     static bool show_clock = false;
     static TickType_t next_swap_tick = 0;
     static TickType_t swap_interval_ticks = 0;
+    static bool mode_was_changed = false;
     uint8_t* framebuffer;
 
     if (swap_interval_ticks == 0) {
@@ -1090,12 +1091,14 @@ static void handleModeClockWeather(bool first_run)
         show_clock = false;
         framebuffer_clear();
         next_swap_tick = now_ticks + swap_interval_ticks;
+        mode_was_changed = true;
     }
 
     if ((int32_t)(now_ticks - next_swap_tick) >= 0) {
         show_clock = !show_clock;
         next_swap_tick = now_ticks + swap_interval_ticks;
         framebuffer_clear();
+        mode_was_changed = true;
     }
 
     if (show_clock) {
@@ -1112,8 +1115,10 @@ static void handleModeClockWeather(bool first_run)
 
         strftime(draw_buf, sizeof(draw_buf), "%a %d", &timeinfo);
         framebuffer = framebuffer_draw_string(draw_buf, 3, font_3x6.font_height + 2, &font_3x6, false);
-
-        flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
+        if (mode_was_changed) {
+            mode_was_changed = false;
+            flip_dot_driver_draw_silent(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT, 10000);
+        }
     } else {
         float outside_temperature = 0.0f;
         float humidity = 0.0f;
@@ -1196,7 +1201,10 @@ static void handleModeClockWeather(bool first_run)
             framebuffer = framebuffer_set_pixel_value(FRAMEBUFFER_WIDTH - 1, outside_y, 1);
         }
 
-        flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
+        if (mode_was_changed) {
+            mode_was_changed = false;
+            flip_dot_driver_draw_silent(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT, 10000);
+        }
     }
 
     vTaskDelay(pdMS_TO_TICKS(1000));

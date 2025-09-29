@@ -25,7 +25,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 
 DEFAULT_DEVICE = "http://flip.local"
-DEFAULT_SERVE_TIME = 120
+DEFAULT_SERVE_TIME_S = 30
 
 
 def normalize_base_url(url: Optional[str]) -> str:
@@ -79,7 +79,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--url", help="If supplied, skip hosting and send this firmware URL to the device")
     parser.add_argument("--listen", default="0.0.0.0", help="Address to bind the local HTTP server")
     parser.add_argument("--port", type=int, default=8000, help="Port for the local HTTP server")
-    parser.add_argument("--serve-seconds", type=int, default=DEFAULT_SERVE_TIME, help="Duration to keep the HTTP server alive; 0 to keep running until Ctrl+C")
+    parser.add_argument("--serve-seconds", type=int, default=DEFAULT_SERVE_TIME_S, help="Duration to keep the HTTP server alive; 0 to keep running until Ctrl+C")
     parser.add_argument("--host-ip", help="Public IP/hostname the device can reach (defaults to autodetected outbound IP)")
     return parser.parse_args()
 
