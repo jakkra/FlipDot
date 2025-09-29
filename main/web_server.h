@@ -13,7 +13,6 @@ typedef enum websocket_event_t
 typedef void(websocket_callback(websocket_event_t status, uint8_t* data, uint32_t len));
 typedef void(mode_change_callback(uint32_t mode, char* extra_arg));
 
-#define MODE_COMMAND_ALERT UINT32_MAX
 #define MODE_COMMAND_NEXT  (UINT32_MAX - 1U)
 #define MODE_COMMAND_PREV  (UINT32_MAX - 2U)
 #define MODE_COMMAND_SET_INVERT (UINT32_MAX - 3U)

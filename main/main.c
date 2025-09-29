@@ -66,7 +66,6 @@ typedef enum Mode_t {
     MODE_SCROLL_TEXT = 1,
     MODE_REMOTE_CONTROL = 2,
     MODE_SOLAR = 3,
-    MODE_ALERT = 5,
     MODE_PREVENTIVE_MAINTENANCE_MODE = 6,
     MODE_ANALOG_CLOCK = 7,
     MODE_CLOCK_WEATHER = 8,
@@ -86,8 +85,6 @@ static bool websocket_connected = false;
 static bool mode_changed = true;
 static char ip_addr[100] = "Waiting ip...";
 static char scrolling_text[100] = "Scrolling text looks OK...";
-static char alert_message[128] = {0};
-static TickType_t alert_expire_tick = 0;
 
 static const Mode_t kModeCycle[] = {
     MODE_CLOCK,
@@ -137,7 +134,6 @@ typedef struct {
 
 static sensor_cache_t sensor_cache;
 
-#define ALERT_DISPLAY_DURATION_MS 10000
 #define SENSOR_POLL_INTERVAL_MS 30000
 #define HTTP_CLIENT_RETRY_DELAY_MS 5000
 
@@ -147,11 +143,9 @@ static void handleModeAnalogClock(bool first_run);
 static void handleModeClockWeather(bool first_run);
 static void handleModeScrollingText(bool first_run, char* text);
 static void handle_preventive_maintenance(bool first_run);
-static void handleModeAlert(bool first_run);
 static void redraw_flip_dot(uint8_t* framebuffer);
 static esp_err_t fetch_home_assistant_sensor_state(const char* sensor_id, int32_t* sensor_value);
 static esp_err_t fetch_home_assistant_weather_state(void);
-static void trigger_alert(const char* message);
 static void sensor_cache_init(void);
 static void home_assistant_poll_task(void* arg);
 static bool sensor_cache_get_temperature(int32_t* value);
@@ -244,11 +238,6 @@ static void handle_websocket_event(websocket_event_t event, uint8_t* data, uint3
 static void handle_mode_changed(uint32_t new_mode, char* extra_arg) {
     const char* safe_arg = (extra_arg != NULL) ? extra_arg : "";
 
-    if (new_mode == MODE_COMMAND_ALERT) {
-        trigger_alert(safe_arg);
-        return;
-    }
-
     if (new_mode == MODE_COMMAND_SET_INVERT) {
         bool requested_invert = false;
         if (!parse_bool_string(safe_arg, &requested_invert)) {
@@ -275,35 +264,8 @@ static void handle_mode_changed(uint32_t new_mode, char* extra_arg) {
 
     Mode_t requested_mode = normalize_mode(new_mode);
 
-    if (requested_mode == MODE_ALERT) {
-        trigger_alert(safe_arg);
-        return;
-    }
-
     apply_mode_selection(requested_mode, safe_arg);
     start_mode_banner(requested_mode);
-}
-
-static void trigger_alert(const char* message)
-{
-    const char* safe_message = message != NULL ? message : "";
-
-    if (safe_message[0] == '\0') {
-        safe_message = "Alert!";
-    }
-
-    if (mode != MODE_ALERT) {
-        previous_mode = mode;
-    }
-
-    snprintf(alert_message, sizeof(alert_message), "%s", safe_message);
-    alert_message[sizeof(alert_message) - 1] = '\0';
-
-    framebuffer_clear();
-    alert_expire_tick = xTaskGetTickCount() + pdMS_TO_TICKS(ALERT_DISPLAY_DURATION_MS);
-    mode = MODE_ALERT;
-    mode_changed = true;
-    mode_transition_pending = true;
 }
 
 static void sensor_cache_init(void)
@@ -536,8 +498,6 @@ static const char* mode_to_string(Mode_t current_mode)
             return "Remote";
         case MODE_SOLAR:
             return "Solar";
-        case MODE_ALERT:
-            return "Alert";
         case MODE_PREVENTIVE_MAINTENANCE_MODE:
             return "Maintenance";
         case MODE_ANALOG_CLOCK:
@@ -571,7 +531,6 @@ static bool mode_is_valid(Mode_t candidate)
         case MODE_SCROLL_TEXT:
         case MODE_REMOTE_CONTROL:
         case MODE_SOLAR:
-        case MODE_ALERT:
         case MODE_PREVENTIVE_MAINTENANCE_MODE:
         case MODE_ANALOG_CLOCK:
         case MODE_FIREFLIES_IDLE:
@@ -824,8 +783,8 @@ static void home_assistant_poll_task(void* arg)
 static void initialise_mdns(void)
 {
     ESP_ERROR_CHECK(mdns_init());
-    ESP_ERROR_CHECK(mdns_hostname_set("flip-dot"));
-    ESP_ERROR_CHECK(mdns_instance_name_set("flip-dot-instance"));
+    ESP_ERROR_CHECK(mdns_hostname_set("flip"));
+    ESP_ERROR_CHECK(mdns_instance_name_set("flip-instance"));
 
     //structure with TXT records
     mdns_txt_item_t serviceTxtData[2] = {
@@ -835,7 +794,7 @@ static void initialise_mdns(void)
 
     ESP_ERROR_CHECK(mdns_service_add("FlipDotDisplay", "_http", "_tcp", 80, serviceTxtData, sizeof(serviceTxtData) / sizeof(serviceTxtData[0])));
     netbiosns_init();
-    netbiosns_set_name("flip-dot");
+    netbiosns_set_name("flip");
 }
 
 void time_sync_notification_cb(struct timeval *tv)
@@ -915,21 +874,6 @@ static void handleModeSolar(void)
     } else {
         handleModeClock(true);
     }
-}
-
-static void handleModeAlert(bool first_run)
-{
-    uint8_t* framebuffer;
-
-    if (first_run) {
-        framebuffer_clear();
-        if (framebuffer_scrolling_text(alert_message, 0, 4, 200, &font_homespun_7x7, redraw_flip_dot) != ESP_OK) {
-            framebuffer = framebuffer_draw_string(alert_message, 0, 0, &font_3x6, true);
-            flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
-        }
-    }
-
-    vTaskDelay(pdMS_TO_TICKS(150));
 }
 
 static void handleModeClock(bool first_run)
@@ -1416,18 +1360,6 @@ void app_main() {
         bool skip_banner = mode_skip_banner_on_next_change;
         mode_skip_banner_on_next_change = false;
 
-        if (mode == MODE_ALERT && alert_expire_tick != 0) {
-            TickType_t now_ticks = xTaskGetTickCount();
-            if ((int32_t)(alert_expire_tick - now_ticks) <= 0) {
-                framebuffer_clear();
-                mode = previous_mode;
-                mode_changed = true;
-                mode_transition_pending = true;
-                alert_expire_tick = 0;
-                continue;
-            }
-        }
-
         get_time(&timeinfo);
         if (timeinfo.tm_hour == MAINTENANCE_HOUR && timeinfo.tm_min == MAINTENANCE_MINUTE) {
             if (mode != MODE_PREVENTIVE_MAINTENANCE_MODE) {
@@ -1519,9 +1451,6 @@ void app_main() {
                 break;
             case MODE_LISSAJOUS:
                 handleModeLissajous(temp_mode_changed);
-                break;
-            case MODE_ALERT:
-                handleModeAlert(temp_mode_changed);
                 break;
             case MODE_PREVENTIVE_MAINTENANCE_MODE:
                 handle_preventive_maintenance(temp_mode_changed);

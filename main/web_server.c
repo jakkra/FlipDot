@@ -12,6 +12,9 @@
 #include "string.h"
 #include <stdint.h>
 #include <ctype.h>
+#include <stdlib.h>
+
+#include "ota_update.h"
 
 #define CACHE_CONTROL_STATIC "public, max-age=31536000"
 
@@ -48,10 +51,10 @@ static void on_client_disconnect(httpd_handle_t hd, int sockfd);
 static void failsafe_timer_callback(void* arg);
 static esp_err_t ws_handler(httpd_req_t *req);
 static esp_err_t mode_change_handler(httpd_req_t *req);
-static esp_err_t alert_handler(httpd_req_t *req);
 static esp_err_t mode_next_handler(httpd_req_t *req);
 static esp_err_t mode_prev_handler(httpd_req_t *req);
 static esp_err_t invert_handler(httpd_req_t *req);
+static esp_err_t fw_update_handler(httpd_req_t *req);
 static esp_err_t root_handler(httpd_req_t *req);
 static esp_err_t index_html_handler(httpd_req_t *req);
 static esp_err_t js_bundle_handler(httpd_req_t *req);
@@ -60,6 +63,7 @@ static void async_send(void *arg);
 static bool parse_bool_param(const char* value, bool* out_value);
 
 static esp_err_t send_gzip_response(httpd_req_t *req, const uint8_t* start, const uint8_t* end, const char* content_type, const char* cache_control);
+static esp_err_t send_simple_response(httpd_req_t *req, const char *status, const char *message);
 
 static esp_err_t send_gzip_response(httpd_req_t *req, const uint8_t* start, const uint8_t* end, const char* content_type, const char* cache_control)
 {
@@ -70,6 +74,15 @@ static esp_err_t send_gzip_response(httpd_req_t *req, const uint8_t* start, cons
         httpd_resp_set_hdr(req, "Cache-Control", cache_control);
     }
     return httpd_resp_send(req, (const char*)start, len);
+}
+
+static esp_err_t send_simple_response(httpd_req_t *req, const char *status, const char *message)
+{
+    if (status != NULL) {
+        httpd_resp_set_status(req, status);
+    }
+    httpd_resp_set_type(req, "text/plain");
+    return httpd_resp_sendstr(req, message != NULL ? message : "");
 }
 
 static const httpd_uri_t ws = {
@@ -122,16 +135,16 @@ static const httpd_uri_t mode_prev_get = {
     .handler   = mode_prev_handler,
 };
 
-static const httpd_uri_t alert_get = {
-    .uri       = "/alert",
-    .method    = HTTP_GET,
-    .handler   = alert_handler,
-};
-
 static const httpd_uri_t invert_get = {
     .uri       = "/display/invert",
     .method    = HTTP_GET,
     .handler   = invert_handler,
+};
+
+static const httpd_uri_t fw_update_post = {
+    .uri       = "/fw_update",
+    .method    = HTTP_POST,
+    .handler   = fw_update_handler,
 };
 
 static const char *TAG = "ws_server";
@@ -189,9 +202,9 @@ void webserver_start(void)
     assert(err == ESP_OK);
     err = httpd_register_uri_handler(server.handle, &mode_prev_get);
     assert(err == ESP_OK);
-    err = httpd_register_uri_handler(server.handle, &alert_get);
-    assert(err == ESP_OK);
     err = httpd_register_uri_handler(server.handle, &invert_get);
+    assert(err == ESP_OK);
+    err = httpd_register_uri_handler(server.handle, &fw_update_post);
     assert(err == ESP_OK);
 
     const esp_timer_create_args_t failsafe_timer_args = {
@@ -322,42 +335,6 @@ static esp_err_t ws_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-static esp_err_t alert_handler(httpd_req_t *req)
-{
-    char message[MAX_HTTP_REQ_LEN] = {0};
-    size_t query_len = httpd_req_get_url_query_len(req);
-
-    if (query_len > 0) {
-        char query[MAX_HTTP_REQ_LEN] = {0};
-        if (query_len >= sizeof(query)) {
-            query_len = sizeof(query) - 1;
-        }
-        if (httpd_req_get_url_query_str(req, query, query_len + 1) == ESP_OK) {
-            if (httpd_query_key_value(query, "msg", message, sizeof(message)) != ESP_OK) {
-                message[0] = '\0';
-            }
-        }
-    }
-
-    for (char* c = message; *c != '\0'; ++c) {
-        if (*c == '+') {
-            *c = ' ';
-        }
-    }
-
-    if (message[0] == '\0') {
-        strncpy(message, "Alert", sizeof(message) - 1);
-        message[sizeof(message) - 1] = '\0';
-    }
-
-    server.mode_callback(MODE_COMMAND_ALERT, message);
-
-    httpd_resp_set_type(req, "application/json");
-    const char resp[] = "{\"status\":\"accepted\"}";
-    httpd_resp_send(req, resp, strlen(resp));
-    return ESP_OK;
-}
-
 static bool parse_bool_param(const char* value, bool* out_value)
 {
     if (value == NULL || out_value == NULL) {
@@ -460,6 +437,56 @@ static esp_err_t invert_handler(httpd_req_t *req)
     snprintf(resp, sizeof(resp), "{\"inverted\":%s}", current_state ? "true" : "false");
     httpd_resp_send(req, resp, strlen(resp));
     return ESP_OK;
+}
+
+static esp_err_t fw_update_handler(httpd_req_t *req)
+{
+    if (req->content_len <= 0 || req->content_len > 1024) {
+        return send_simple_response(req, "400 Bad Request", "Expected firmware URL in request body\n");
+    }
+
+    char *body = (char *)malloc(req->content_len + 1);
+    if (body == NULL) {
+        return send_simple_response(req, "500 Internal Server Error", "Out of memory\n");
+    }
+
+    int received = 0;
+    while (received < req->content_len) {
+        int r = httpd_req_recv(req, body + received, req->content_len - received);
+        if (r <= 0) {
+            free(body);
+            return send_simple_response(req, "500 Internal Server Error", "Failed to read body\n");
+        }
+        received += r;
+    }
+    body[received] = '\0';
+
+    size_t trimmed_len = strcspn(body, "\r\n");
+    body[trimmed_len] = '\0';
+
+    // Skip leading whitespace
+    char *url = body;
+    while (*url == ' ' || *url == '\t') {
+        url++;
+    }
+
+    if (*url == '\0') {
+        free(body);
+        return send_simple_response(req, "400 Bad Request", "Empty URL\n");
+    }
+
+    esp_err_t err = flipdot_ota_start(url);
+    if (err == ESP_ERR_INVALID_STATE) {
+        free(body);
+        return send_simple_response(req, "409 Conflict", "OTA already running\n");
+    }
+    if (err != ESP_OK) {
+        free(body);
+        return send_simple_response(req, "500 Internal Server Error", "Failed to start OTA\n");
+    }
+
+    free(body);
+    return send_simple_response(req, "202 Accepted", "OTA started\n");
 }
 
 static esp_err_t mode_change_handler(httpd_req_t *req)
