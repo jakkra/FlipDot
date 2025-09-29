@@ -19,11 +19,25 @@
 static const char *TAG = "flipdot_ota";
 
 static TaskHandle_t s_ota_task_handle = NULL;
+static flipdot_ota_status_cb_t s_status_callback = NULL;
+static void *s_status_ctx = NULL;
+
+static void notify_status(flipdot_ota_status_t status, size_t written, size_t total)
+{
+    if (s_status_callback != NULL) {
+        s_status_callback(status, written, total, s_status_ctx);
+    }
+}
 
 static void ota_task(void *pvParameter)
 {
     char *url = (char *)pvParameter;
     ESP_LOGI(TAG, "Starting OTA from %s", url);
+
+    notify_status(FLIPDOT_OTA_STATUS_START, 0, 0);
+
+    size_t expected_total = 0;
+    size_t total_written = 0;
 
     esp_http_client_config_t config = {
         .url = url,
@@ -56,6 +70,8 @@ static void ota_task(void *pvParameter)
     }
 
     int64_t content_length = esp_http_client_get_content_length(client);
+    expected_total = content_length > 0 ? (size_t)content_length : 0;
+    notify_status(FLIPDOT_OTA_STATUS_PROGRESS, 0, expected_total);
     ESP_LOGI(TAG, "Image size: %lld bytes", content_length);
 
     const esp_partition_t *update_partition = esp_ota_get_next_update_partition(NULL);
@@ -81,7 +97,6 @@ static void ota_task(void *pvParameter)
         goto cleanup_client;
     }
 
-    int total_written = 0;
     while (1) {
         int data_read = esp_http_client_read(client, (char *)buffer, OTA_BUFFER_SIZE);
         if (data_read < 0) {
@@ -100,7 +115,8 @@ static void ota_task(void *pvParameter)
             ESP_LOGE(TAG, "esp_ota_write failed (%s)", esp_err_to_name(err));
             break;
         }
-        total_written += data_read;
+        total_written += (size_t)data_read;
+        notify_status(FLIPDOT_OTA_STATUS_PROGRESS, total_written, expected_total);
     }
 
     free(buffer);
@@ -122,7 +138,8 @@ static void ota_task(void *pvParameter)
         goto cleanup_client;
     }
 
-    ESP_LOGI(TAG, "OTA successful, written %d bytes. Restarting...", total_written);
+    ESP_LOGI(TAG, "OTA successful, written %u bytes. Restarting...", (unsigned int)total_written);
+    notify_status(FLIPDOT_OTA_STATUS_SUCCESS, total_written, expected_total);
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
     free(url);
@@ -137,6 +154,7 @@ cleanup_client:
 
 cleanup:
     ESP_LOGE(TAG, "OTA failed");
+    notify_status(FLIPDOT_OTA_STATUS_FAILED, total_written, expected_total);
     free(url);
     s_ota_task_handle = NULL;
     vTaskDelete(NULL);
@@ -169,4 +187,10 @@ esp_err_t flipdot_ota_start(const char *url)
 bool flipdot_ota_is_running(void)
 {
     return s_ota_task_handle != NULL;
+}
+
+void flipdot_ota_set_status_callback(flipdot_ota_status_cb_t callback, void *ctx)
+{
+    s_status_callback = callback;
+    s_status_ctx = ctx;
 }

@@ -21,6 +21,7 @@
 
 #include "web_server.h"
 #include "flip_dot_driver.h"
+#include "ota_update.h"
 #include "esp_sntp.h"
 #include "esp_netif_sntp.h"
 #include "framebuffer.h"
@@ -76,7 +77,8 @@ typedef enum Mode_t {
     MODE_TUNNEL = 24,
     MODE_BOUNCING_BALLS = 25,
     MODE_TELEPORT = 26,
-    MODE_LISSAJOUS = 27
+    MODE_LISSAJOUS = 27,
+    MODE_OTA_PROGRESS = 100
 } Mode_t;
 
 static Mode_t mode = MODE_REMOTE_CONTROL;
@@ -112,6 +114,14 @@ static Mode_t current_display_mode = MODE_REMOTE_CONTROL;
 static bool mode_transition_pending = false;
 static bool invert_display = false;
 
+static bool ota_display_in_progress = false;
+static bool ota_display_failed = false;
+static bool ota_display_success = false;
+static size_t ota_display_written = 0;
+static size_t ota_display_total = 0;
+static TickType_t ota_display_hold_until = 0;
+static Mode_t ota_previous_mode = MODE_REMOTE_CONTROL;
+
 
 typedef struct {
     int32_t temperature_inside;
@@ -143,6 +153,7 @@ static void handleModeAnalogClock(bool first_run);
 static void handleModeClockWeather(bool first_run);
 static void handleModeScrollingText(bool first_run, char* text);
 static void handle_preventive_maintenance(bool first_run);
+static void handleModeOtaProgress(bool first_run);
 static void redraw_flip_dot(uint8_t* framebuffer);
 static esp_err_t fetch_home_assistant_sensor_state(const char* sensor_id, int32_t* sensor_value);
 static esp_err_t fetch_home_assistant_weather_state(void);
@@ -163,6 +174,7 @@ static void apply_mode_selection(Mode_t requested_mode, const char* extra_arg);
 static bool parse_bool_string(const char* value, bool* out_value);
 static void apply_invert_setting(bool invert, bool persist);
 static const char* weather_condition_to_icon_bits(const char* condition);
+static void ota_status_callback(flipdot_ota_status_t status, size_t bytes_written, size_t total_bytes, void *ctx);
 
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
@@ -518,6 +530,8 @@ static const char* mode_to_string(Mode_t current_mode)
             return "Teleport";
         case MODE_LISSAJOUS:
             return "Lissajous";
+        case MODE_OTA_PROGRESS:
+            return "Update";
         default:
             return "Mode";
     }
@@ -541,6 +555,7 @@ static bool mode_is_valid(Mode_t candidate)
         case MODE_BOUNCING_BALLS:
         case MODE_TELEPORT:
         case MODE_LISSAJOUS:
+        case MODE_OTA_PROGRESS:
             return true;
         default:
             return false;
@@ -700,6 +715,63 @@ static bool parse_bool_string(const char* value, bool* out_value)
     return false;
 }
 
+static void ota_status_callback(flipdot_ota_status_t status, size_t bytes_written, size_t total_bytes, void *ctx)
+{
+    (void)ctx;
+
+    switch (status) {
+        case FLIPDOT_OTA_STATUS_START:
+            ota_previous_mode = mode;
+            ota_display_in_progress = true;
+            ota_display_failed = false;
+            ota_display_success = false;
+            ota_display_written = 0;
+            ota_display_total = total_bytes;
+            ota_display_hold_until = 0;
+            mode_banner_active = false;
+            mode_skip_banner_on_next_change = true;
+            mode_transition_pending = false;
+            mode = MODE_OTA_PROGRESS;
+            mode_changed = true;
+            break;
+        case FLIPDOT_OTA_STATUS_PROGRESS:
+            ota_display_in_progress = true;
+            ota_display_written = bytes_written;
+            ota_display_total = total_bytes;
+            mode_banner_active = false;
+            mode_skip_banner_on_next_change = true;
+            break;
+        case FLIPDOT_OTA_STATUS_SUCCESS:
+            ota_display_in_progress = false;
+            ota_display_success = true;
+            ota_display_failed = false;
+            ota_display_written = bytes_written;
+            ota_display_total = total_bytes;
+            ota_display_hold_until = xTaskGetTickCount() + pdMS_TO_TICKS(1000);
+            mode_banner_active = false;
+            mode_skip_banner_on_next_change = true;
+            mode_transition_pending = false;
+            mode = MODE_OTA_PROGRESS;
+            mode_changed = true;
+            break;
+        case FLIPDOT_OTA_STATUS_FAILED:
+            ota_display_in_progress = false;
+            ota_display_failed = true;
+            ota_display_success = false;
+            ota_display_written = bytes_written;
+            ota_display_total = total_bytes;
+            ota_display_hold_until = xTaskGetTickCount() + pdMS_TO_TICKS(5000);
+            mode_banner_active = false;
+            mode_skip_banner_on_next_change = true;
+            mode_transition_pending = false;
+            mode = MODE_OTA_PROGRESS;
+            mode_changed = true;
+            break;
+        default:
+            break;
+    }
+}
+
 static void apply_invert_setting(bool invert, bool persist)
 {
     invert_display = invert;
@@ -819,12 +891,84 @@ static void initialize_sntp(void)
 }
 
 static void handleModeScrollingText(bool first_run, char* text)
-{   
+{
     if (first_run) {
         framebuffer_clear();
         framebuffer_scrolling_text(text, 0, 3, 200, &font_homespun_7x7, redraw_flip_dot);
     }
     vTaskDelay(pdMS_TO_TICKS(1000));
+}
+
+static void handleModeOtaProgress(bool first_run)
+{
+    (void)first_run;
+
+    uint8_t* framebuffer = framebuffer_clear();
+    font_t* font = &font_3x6;
+    char line1[20];
+    char line2[20];
+
+    if (ota_display_in_progress) {
+        strcpy(line1, "Updating");
+
+        if (ota_display_total > 0) {
+            uint32_t percent = (uint32_t)((ota_display_written * 100) / ota_display_total);
+            if (percent > 100) {
+                percent = 100;
+            }
+            snprintf(line2, sizeof(line2), "%3lu%%", (unsigned long)percent);
+        } else {
+            unsigned long kilobytes = (unsigned long)((ota_display_written + 512) / 1024);
+            snprintf(line2, sizeof(line2), "%lu kB", kilobytes);
+        }
+    } else if (ota_display_success) {
+        strcpy(line1, "Update");
+        strcpy(line2, "Success");
+    } else if (ota_display_failed) {
+        strcpy(line1, "Update");
+        strcpy(line2, "Failed");
+    } else {
+        ota_display_in_progress = false;
+        mode = ota_previous_mode;
+        mode_changed = true;
+        mode_transition_pending = true;
+        mode_skip_banner_on_next_change = true;
+        ota_display_written = 0;
+        ota_display_total = 0;
+        return;
+    }
+
+    uint8_t width1 = (uint8_t)framebuffer_get_string_width(line1, font);
+    uint8_t width2 = (uint8_t)framebuffer_get_string_width(line2, font);
+    uint8_t x1 = (width1 < FRAMEBUFFER_WIDTH) ? (uint8_t)((FRAMEBUFFER_WIDTH - width1) / 2) : 0;
+    uint8_t x2 = (width2 < FRAMEBUFFER_WIDTH) ? (uint8_t)((FRAMEBUFFER_WIDTH - width2) / 2) : 0;
+
+    framebuffer = framebuffer_draw_string(line1, x1, 1, font, false);
+    framebuffer = framebuffer_draw_string(line2, x2, FRAMEBUFFER_HEIGHT - font->font_height - 1, font, false);
+
+    flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
+
+    if (!ota_display_in_progress) {
+        if (ota_display_failed) {
+            if ((int32_t)(ota_display_hold_until - xTaskGetTickCount()) <= 0) {
+                ota_display_failed = false;
+                ota_display_written = 0;
+                ota_display_total = 0;
+                mode = ota_previous_mode;
+                mode_changed = true;
+                mode_transition_pending = true;
+                mode_skip_banner_on_next_change = true;
+            }
+        } else if (ota_display_success) {
+            if ((int32_t)(ota_display_hold_until - xTaskGetTickCount()) <= 0) {
+                ota_display_success = false;
+                ota_display_written = 0;
+                ota_display_total = 0;
+            }
+        }
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(200));
 }
 
 static void handleModeSolar(void)
@@ -1330,6 +1474,7 @@ void app_main() {
     mode_transition_pending = true;
 
     webserver_init(&handle_websocket_event, &handle_mode_changed);
+    flipdot_ota_set_status_callback(ota_status_callback, NULL);
     start_station();
 
     webserver_start();
@@ -1451,6 +1596,9 @@ void app_main() {
                 break;
             case MODE_LISSAJOUS:
                 handleModeLissajous(temp_mode_changed);
+                break;
+            case MODE_OTA_PROGRESS:
+                handleModeOtaProgress(temp_mode_changed);
                 break;
             case MODE_PREVENTIVE_MAINTENANCE_MODE:
                 handle_preventive_maintenance(temp_mode_changed);

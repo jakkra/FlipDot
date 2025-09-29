@@ -5,10 +5,10 @@ Minimal CLI helper to trigger an OTA update on flip.local.
 Usage examples:
 
   # Serve ./build/flipdot.bin locally and ask the device to fetch it
-  python ota/ota_update_cli.py build/flipdot.bin
+  python tools/ota_update_cli.py build/flipdot.bin
 
   # If the firmware is already hosted somewhere
-  python ota/ota_update_cli.py --url http://files.example.com/app.bin
+  python tools/ota_update_cli.py --url http://files.example.com/app.bin
 """
 
 import argparse
