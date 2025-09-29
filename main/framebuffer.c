@@ -24,7 +24,6 @@ typedef struct scroll_text_data_t {
 static int16_t drawChar(char c, int16_t x, int16_t y, font_t* font_container);
 static void getWidthOfCharacter(char c, font_t* font_container, uint8_t* left_offset, uint8_t* right_offset, uint8_t* true_width);
 static void scroll_task(void* arg);
-static uint16_t get_string_width(const char* str, font_t* font_container);
 
 static uint8_t framebuffer[FRAMEBUFFER_HEIGHT][FRAMEBUFFER_WIDTH];
 
@@ -91,6 +90,43 @@ uint8_t* framebuffer_draw_bitmap(uint8_t width, uint8_t height, const uint8_t bi
     return (uint8_t*)framebuffer;
 }
 
+uint8_t* framebuffer_draw_xbm16x16_cropped(const char* bitmap_bits, int16_t x, int16_t y, uint8_t skip_top_rows, uint8_t skip_bottom_rows)
+{
+    if (bitmap_bits == NULL) {
+        return (uint8_t*)framebuffer;
+    }
+
+    const uint8_t* data = (const uint8_t*)bitmap_bits;
+    const uint8_t width = 16;
+    const uint8_t height = 16;
+    const uint8_t bytes_per_row = (width + 7) / 8;
+
+    if (skip_top_rows + skip_bottom_rows >= height) {
+        return (uint8_t*)framebuffer;
+    }
+
+    const uint8_t effective_height = height - skip_top_rows - skip_bottom_rows;
+
+    for (uint8_t row = 0; row < effective_height; row++) {
+        uint8_t source_row = (uint8_t)(row + skip_top_rows);
+        for (uint8_t col = 0; col < width; col++) {
+            int16_t target_x = x + col;
+            int16_t target_y = y + row;
+
+            if (target_x < 0 || target_x >= FRAMEBUFFER_WIDTH ||
+                target_y < 0 || target_y >= FRAMEBUFFER_HEIGHT) {
+                continue;
+            }
+
+            uint8_t byte = data[source_row * bytes_per_row + (col / 8)];
+            uint8_t mask = (uint8_t)1u << (col % 8);
+            framebuffer[target_y][target_x] = (byte & mask) ? 1 : 0;
+        }
+    }
+
+    return (uint8_t*)framebuffer;
+}
+
 esp_err_t framebuffer_scrolling_text(char* str, uint8_t x, uint8_t y, uint32_t scroll_interval_ms, font_t* font, on_framebuffer_updated* on_update)
 {
     if (scroll_data.on_update_callback != NULL) {
@@ -105,7 +141,7 @@ esp_err_t framebuffer_scrolling_text(char* str, uint8_t x, uint8_t y, uint32_t s
     strcpy(scroll_data.scrolling_text, str);
     scroll_data.font = font;
     scroll_data.pixel_offset = FRAMEBUFFER_WIDTH;
-    scroll_data.text_width = get_string_width(scroll_data.scrolling_text, font);
+    scroll_data.text_width = framebuffer_get_string_width(scroll_data.scrolling_text, font);
     assert(xTaskCreate(scroll_task, "scroll_task", 2048, NULL, 10, &scroll_data.scrolling_task_handle) == pdPASS);
 
     return ESP_OK;
@@ -325,7 +361,7 @@ static int16_t drawChar(char c, int16_t x, int16_t y, font_t* font_container) {
     return advance;
 }
 
-static uint16_t get_string_width(const char* str, font_t* font_container)
+uint16_t framebuffer_get_string_width(const char* str, font_t* font_container)
 {
     uint16_t width_total = 0;
     const char* pos = str;

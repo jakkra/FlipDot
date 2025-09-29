@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <math.h>
 #include <assert.h>
+#include <sys/socket.h>
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -30,6 +31,27 @@
 #include "fonts/font_bmspa.h"
 #include "fonts/font_homespun.h"
 
+#include "weather/cloud.xbm"
+#include "weather/clouds.xbm"
+#include "weather/cloud_moon.xbm"
+#include "weather/cloud_sun.xbm"
+#include "weather/cloud_wind.xbm"
+#include "weather/cloud_wind_moon.xbm"
+#include "weather/cloud_wind_sun.xbm"
+#include "weather/lightning.xbm"
+#include "weather/moon.xbm"
+#include "weather/rain0.xbm"
+#include "weather/rain1.xbm"
+#include "weather/rain1_moon.xbm"
+#include "weather/rain1_sun.xbm"
+#include "weather/rain2.xbm"
+#include "weather/rain_lightning.xbm"
+#include "weather/rain_snow.xbm"
+#include "weather/snow_moon.xbm"
+#include "weather/snow_sun.xbm"
+#include "weather/sun.xbm"
+#include "weather/wind.xbm"
+
 static char TAG[] = "FlipDot";
 
 #define MAX_HTTP_RECV_BUFFER 1000
@@ -37,14 +59,17 @@ static char TAG[] = "FlipDot";
 #define MAINTENANCE_HOUR    2
 #define MAINTENANCE_MINUTE  30
 
+#define CLOCK_WEATHER_SWAP_INTERVAL_MINUTES 1
+
 typedef enum Mode_t {
     MODE_CLOCK = 0,
     MODE_SCROLL_TEXT = 1,
     MODE_REMOTE_CONTROL = 2,
     MODE_SOLAR = 3,
-    MODE_ALERT = 4,
-    MODE_PREVENTIVE_MAINTENANCE_MODE = 5,
-    MODE_ANALOG_CLOCK = 6,
+    MODE_ALERT = 5,
+    MODE_PREVENTIVE_MAINTENANCE_MODE = 6,
+    MODE_ANALOG_CLOCK = 7,
+    MODE_CLOCK_WEATHER = 8,
     MODE_FIREFLIES_IDLE = 20,
     MODE_CELLULAR_AUTOMATA = 21,
     MODE_MATRIX_RAIN = 22,
@@ -66,6 +91,7 @@ static TickType_t alert_expire_tick = 0;
 
 static const Mode_t kModeCycle[] = {
     MODE_CLOCK,
+    MODE_CLOCK_WEATHER,
     MODE_SCROLL_TEXT,
     MODE_REMOTE_CONTROL,
     MODE_SOLAR,
@@ -91,13 +117,20 @@ static bool invert_display = false;
 
 
 typedef struct {
-    uint32_t temperature_inside;
+    int32_t temperature_inside;
     esp_err_t temperature_status;
     TickType_t last_temperature_update;
 
     uint32_t solar_production_watt;
     esp_err_t solar_status;
     TickType_t last_solar_update;
+
+    float weather_temperature;
+    float weather_humidity;
+    float weather_pressure;
+    char weather_condition[32];
+    esp_err_t weather_status;
+    TickType_t last_weather_update;
 
     SemaphoreHandle_t mutex;
 } sensor_cache_t;
@@ -106,20 +139,24 @@ static sensor_cache_t sensor_cache;
 
 #define ALERT_DISPLAY_DURATION_MS 10000
 #define SENSOR_POLL_INTERVAL_MS 30000
+#define HTTP_CLIENT_RETRY_DELAY_MS 5000
 
 static void handleModeSolar(void);
 static void handleModeClock(bool first_run);
 static void handleModeAnalogClock(bool first_run);
+static void handleModeClockWeather(bool first_run);
 static void handleModeScrollingText(bool first_run, char* text);
 static void handle_preventive_maintenance(bool first_run);
 static void handleModeAlert(bool first_run);
 static void redraw_flip_dot(uint8_t* framebuffer);
-static esp_err_t fetch_home_assistant_sensor_state(const char* sensor_id, uint32_t* sensor_value);
+static esp_err_t fetch_home_assistant_sensor_state(const char* sensor_id, int32_t* sensor_value);
+static esp_err_t fetch_home_assistant_weather_state(void);
 static void trigger_alert(const char* message);
 static void sensor_cache_init(void);
 static void home_assistant_poll_task(void* arg);
-static bool sensor_cache_get_temperature(uint32_t* value);
+static bool sensor_cache_get_temperature(int32_t* value);
 static bool sensor_cache_get_solar(uint32_t* value);
+static bool sensor_cache_get_weather(float* temperature, float* humidity, float* pressure, char* condition, size_t condition_size);
 static void get_time(struct tm* timeinfo);
 static void start_mode_banner(Mode_t new_mode);
 static const char* mode_to_string(Mode_t mode);
@@ -128,10 +165,10 @@ static bool mode_is_user_selectable(Mode_t mode);
 static Mode_t normalize_mode(uint32_t stored_mode);
 static Mode_t step_mode(int direction);
 static void draw_mode_banner(void);
-static uint8_t estimate_string_width(const char* text, const font_t* font);
 static void apply_mode_selection(Mode_t requested_mode, const char* extra_arg);
 static bool parse_bool_string(const char* value, bool* out_value);
 static void apply_invert_setting(bool invert, bool persist);
+static const char* weather_condition_to_icon_bits(const char* condition);
 
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
@@ -274,11 +311,12 @@ static void sensor_cache_init(void)
     memset(&sensor_cache, 0, sizeof(sensor_cache));
     sensor_cache.temperature_status = ESP_FAIL;
     sensor_cache.solar_status = ESP_FAIL;
+    sensor_cache.weather_status = ESP_FAIL;
     sensor_cache.mutex = xSemaphoreCreateMutex();
     assert(sensor_cache.mutex != NULL);
 }
 
-static bool sensor_cache_get_temperature(uint32_t* value)
+static bool sensor_cache_get_temperature(int32_t* value)
 {
     bool available = false;
 
@@ -316,11 +354,182 @@ static bool sensor_cache_get_solar(uint32_t* value)
     return available;
 }
 
+static bool sensor_cache_get_weather(float* temperature, float* humidity, float* pressure, char* condition, size_t condition_size)
+{
+    bool available = false;
+
+    if (sensor_cache.mutex == NULL || temperature == NULL || humidity == NULL || 
+        pressure == NULL || condition == NULL) {
+        return false;
+    }
+
+    if (xSemaphoreTake(sensor_cache.mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        if (sensor_cache.weather_status == ESP_OK) {
+            *temperature = sensor_cache.weather_temperature;
+            *humidity = sensor_cache.weather_humidity;
+            *pressure = sensor_cache.weather_pressure;
+            strncpy(condition, sensor_cache.weather_condition, condition_size - 1);
+            condition[condition_size - 1] = '\0';
+            available = true;
+        }
+        xSemaphoreGive(sensor_cache.mutex);
+    }
+
+    return available;
+}
+
+static const char* weather_condition_to_icon_bits(const char* condition)
+{
+    const char* fallback = cloud_bits;
+
+    if (condition == NULL || condition[0] == '\0') {
+        return fallback;
+    }
+
+    char normalized[48];
+    size_t len = strlen(condition);
+    if (len > sizeof(normalized) - 1) {
+        len = sizeof(normalized) - 1;
+    }
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)condition[i];
+        c = (unsigned char)tolower(c);
+        if (c == ' ' || c == '_') {
+            c = '-';
+        }
+        normalized[i] = (char)c;
+    }
+    normalized[len] = '\0';
+
+    struct tm timeinfo;
+    get_time(&timeinfo);
+    bool is_night = (timeinfo.tm_hour < 6 || timeinfo.tm_hour >= 20);
+
+    if (strcmp(normalized, "clear-night") == 0) {
+        return moon_bits;
+    }
+
+    if (strcmp(normalized, "sunny") == 0 || strcmp(normalized, "clear-day") == 0) {
+        return sun_bits;
+    }
+
+    if (strcmp(normalized, "clear") == 0) {
+        return is_night ? moon_bits : sun_bits;
+    }
+
+    if (strcmp(normalized, "partlycloudy") == 0 || strcmp(normalized, "partly-cloudy") == 0) {
+        return is_night ? cloud_moon_bits : cloud_sun_bits;
+    }
+
+    if (strcmp(normalized, "cloudy") == 0 || strcmp(normalized, "overcast") == 0) {
+        return clouds_bits;
+    }
+
+    if (strcmp(normalized, "windy-variant") == 0) {
+        return is_night ? cloud_wind_moon_bits : cloud_wind_sun_bits;
+    }
+
+    if (strcmp(normalized, "windy") == 0) {
+        return wind_bits;
+    }
+
+    if (strcmp(normalized, "fog") == 0 || strcmp(normalized, "mist") == 0) {
+        return cloud_bits;
+    }
+
+    if (strcmp(normalized, "hail") == 0) {
+        return rain_snow_bits;
+    }
+
+    if (strcmp(normalized, "lightning-rainy") == 0 || strcmp(normalized, "thunderstorm") == 0) {
+        return rain_lightning_bits;
+    }
+
+    if (strcmp(normalized, "lightning") == 0) {
+        return lightning_bits;
+    }
+
+    if (strcmp(normalized, "pouring") == 0) {
+        return rain2_bits;
+    }
+
+    if (strcmp(normalized, "rainy") == 0) {
+        return is_night ? rain1_moon_bits : rain1_sun_bits;
+    }
+
+    if (strcmp(normalized, "drizzle") == 0 || strcmp(normalized, "light-rain") == 0) {
+        return rain0_bits;
+    }
+
+    if (strcmp(normalized, "snowy-rainy") == 0) {
+        return rain_snow_bits;
+    }
+
+    if (strcmp(normalized, "snowy") == 0) {
+        return is_night ? snow_moon_bits : snow_sun_bits;
+    }
+
+    if (strcmp(normalized, "exceptional") == 0) {
+        return rain_lightning_bits;
+    }
+
+    if (strstr(normalized, "lightning") != NULL ||
+        strstr(normalized, "thunder") != NULL ||
+        strstr(normalized, "storm") != NULL) {
+        return rain_lightning_bits;
+    }
+
+    if (strstr(normalized, "snow") != NULL) {
+        if (strstr(normalized, "rain") != NULL) {
+            return rain_snow_bits;
+        }
+        return is_night ? snow_moon_bits : snow_sun_bits;
+    }
+
+    if (strstr(normalized, "hail") != NULL) {
+        return rain_snow_bits;
+    }
+
+    if (strstr(normalized, "rain") != NULL ||
+        strstr(normalized, "drizzle") != NULL ||
+        strstr(normalized, "shower") != NULL) {
+        return is_night ? rain1_moon_bits : rain1_bits;
+    }
+
+    if (strstr(normalized, "wind") != NULL || strstr(normalized, "breeze") != NULL) {
+        return wind_bits;
+    }
+
+    if (strstr(normalized, "fog") != NULL || strstr(normalized, "mist") != NULL) {
+        return cloud_bits;
+    }
+
+    if (strstr(normalized, "partly") != NULL && strstr(normalized, "cloud") != NULL) {
+        return is_night ? cloud_moon_bits : cloud_sun_bits;
+    }
+
+    if (strstr(normalized, "cloud") != NULL || strstr(normalized, "overcast") != NULL) {
+        return clouds_bits;
+    }
+
+    if (is_night) {
+        return moon_bits;
+    }
+
+    if (strstr(normalized, "sun") != NULL || strstr(normalized, "clear") != NULL) {
+        return sun_bits;
+    }
+
+    return fallback;
+}
+
 static const char* mode_to_string(Mode_t current_mode)
 {
     switch (current_mode) {
         case MODE_CLOCK:
             return "Clock D";
+        case MODE_CLOCK_WEATHER:
+            return "Clock+W";
         case MODE_SCROLL_TEXT:
             return "Scroll";
         case MODE_REMOTE_CONTROL:
@@ -358,6 +567,7 @@ static bool mode_is_valid(Mode_t candidate)
 {
     switch (candidate) {
         case MODE_CLOCK:
+        case MODE_CLOCK_WEATHER:
         case MODE_SCROLL_TEXT:
         case MODE_REMOTE_CONTROL:
         case MODE_SOLAR:
@@ -436,19 +646,10 @@ static Mode_t step_mode(int direction)
     return kModeCycle[next_index];
 }
 
-static uint8_t estimate_string_width(const char* text, const font_t* font)
-{
-    size_t length = strlen(text);
-    if (length == 0) {
-        return 0;
-    }
-    return (uint8_t)(length * (font->font_width + 1) - 1);
-}
-
 static void draw_mode_banner(void)
 {
     font_t* font = &font_3x6;
-    uint8_t text_width = estimate_string_width(mode_banner_text, font);
+    uint8_t text_width = (uint8_t)framebuffer_get_string_width(mode_banner_text, font);
     uint8_t x = 0;
     if (FRAMEBUFFER_WIDTH > text_width) {
         x = (uint8_t)((FRAMEBUFFER_WIDTH - text_width) / 2);
@@ -560,6 +761,7 @@ static void home_assistant_poll_task(void* arg)
     (void)arg;
     TickType_t last_temp_poll = 0;
     TickType_t last_solar_poll = 0;
+    TickType_t last_weather_poll = 0;
 
     const TickType_t poll_interval = pdMS_TO_TICKS(SENSOR_POLL_INTERVAL_MS);
 
@@ -568,7 +770,7 @@ static void home_assistant_poll_task(void* arg)
 
 #ifdef CONFIG_HOME_ASSISTANT_SENSOR_ENTITY_ID
         if ((now - last_temp_poll >= poll_interval) || sensor_cache.temperature_status != ESP_OK) {
-            uint32_t value = 0;
+            int32_t value = 0;
             esp_err_t err = fetch_home_assistant_sensor_state(CONFIG_HOME_ASSISTANT_SENSOR_ENTITY_ID, &value);
             if (xSemaphoreTake(sensor_cache.mutex, portMAX_DELAY) == pdTRUE) {
                 sensor_cache.temperature_status = err;
@@ -584,12 +786,12 @@ static void home_assistant_poll_task(void* arg)
 
 #ifdef CONFIG_HOME_ASSISTANT_SENSOR_ENTITY_SOLAR_PRODUCTION_ID
         if ((now - last_solar_poll >= poll_interval) || sensor_cache.solar_status != ESP_OK) {
-            uint32_t value = 0;
+            int32_t value = 0;
             esp_err_t err = fetch_home_assistant_sensor_state(CONFIG_HOME_ASSISTANT_SENSOR_ENTITY_SOLAR_PRODUCTION_ID, &value);
             if (xSemaphoreTake(sensor_cache.mutex, portMAX_DELAY) == pdTRUE) {
                 sensor_cache.solar_status = err;
                 if (err == ESP_OK) {
-                    sensor_cache.solar_production_watt = value;
+                    sensor_cache.solar_production_watt = value < 0 ? 0 : (uint32_t)value;
                 }
                 sensor_cache.last_solar_update = now;
                 xSemaphoreGive(sensor_cache.mutex);
@@ -597,6 +799,24 @@ static void home_assistant_poll_task(void* arg)
             last_solar_poll = now;
         }
 #endif
+
+        // Weather polling
+        if ((now - last_weather_poll >= poll_interval) || sensor_cache.weather_status != ESP_OK) {
+            esp_err_t err = fetch_home_assistant_weather_state();
+            if (xSemaphoreTake(sensor_cache.mutex, portMAX_DELAY) == pdTRUE) {
+                sensor_cache.weather_status = err;
+                sensor_cache.last_weather_update = now;
+                xSemaphoreGive(sensor_cache.mutex);
+            }
+            last_weather_poll = now;
+
+            // If all requests failed, wait a bit longer before retrying
+            if (sensor_cache.temperature_status != ESP_OK &&
+                sensor_cache.solar_status != ESP_OK && 
+                sensor_cache.weather_status != ESP_OK) {
+                vTaskDelay(pdMS_TO_TICKS(5000)); // Wait 5 seconds on total failure
+            }
+        }
 
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
@@ -726,14 +946,14 @@ static void handleModeClock(bool first_run)
     time(&now);
     localtime_r(&now, &timeinfo);
 
-    uint32_t temperature_inside = 0;
+    int32_t temperature_inside = 0;
     bool temp_available = sensor_cache_get_temperature(&temperature_inside);
 
-    if (timeinfo.tm_sec % 2 == 0) {
+    //if (timeinfo.tm_sec % 2 == 0) {
         strftime(strftime_buf, sizeof(strftime_buf), "%H:%M", &timeinfo);
-    } else {
-        strftime(strftime_buf, sizeof(strftime_buf), "%H %M", &timeinfo);
-    }
+    //} else {
+    //    strftime(strftime_buf, sizeof(strftime_buf), "%H %M", &timeinfo);
+    //}
     framebuffer_clear();
     framebuffer = framebuffer_draw_string(strftime_buf, 0, 1, &font_3x6, false);
 
@@ -741,8 +961,13 @@ static void handleModeClock(bool first_run)
     framebuffer = framebuffer_draw_string(strftime_buf, 3, font_3x6.font_height + 2, &font_3x6, false);
 
     if (temp_available) {
-        snprintf(strftime_buf, sizeof(strftime_buf), "%lu", (unsigned long)temperature_inside);
-        framebuffer = framebuffer_draw_string(strftime_buf, (FRAMEBUFFER_WIDTH - 1) - 3 * strlen(strftime_buf) - 1, 1, &font_3x6, false);
+        snprintf(strftime_buf, sizeof(strftime_buf), "%ld", (long)temperature_inside);
+        uint8_t temp_width = (uint8_t)framebuffer_get_string_width(strftime_buf, &font_3x6);
+        uint8_t temp_x = 0;
+        if (FRAMEBUFFER_WIDTH > temp_width) {
+            temp_x = (uint8_t)(FRAMEBUFFER_WIDTH - temp_width - 1);
+        }
+        framebuffer = framebuffer_draw_string(strftime_buf, temp_x, 1, &font_3x6, false);
         // Manually add a "celcius" character
         framebuffer = framebuffer_set_pixel_value(FRAMEBUFFER_WIDTH - 1, 0, 1);
         // Draw a line between the time and temperature
@@ -750,6 +975,142 @@ static void handleModeClock(bool first_run)
     }
 
     flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+}
+
+static void handleModeClockWeather(bool first_run)
+{
+    static bool show_clock = false;
+    static TickType_t next_swap_tick = 0;
+    static TickType_t swap_interval_ticks = 0;
+    uint8_t* framebuffer;
+
+    if (swap_interval_ticks == 0) {
+        int minutes = CLOCK_WEATHER_SWAP_INTERVAL_MINUTES;
+        if (minutes < 1) {
+            minutes = 1;
+        }
+        swap_interval_ticks = pdMS_TO_TICKS(minutes * 60 * 1000);
+        if (swap_interval_ticks == 0) {
+            swap_interval_ticks = pdMS_TO_TICKS(60000);
+        }
+    }
+
+    TickType_t now_ticks = xTaskGetTickCount();
+
+    if (first_run) {
+        show_clock = false;
+        framebuffer_clear();
+        next_swap_tick = now_ticks + swap_interval_ticks;
+    }
+
+    if ((int32_t)(now_ticks - next_swap_tick) >= 0) {
+        show_clock = !show_clock;
+        next_swap_tick = now_ticks + swap_interval_ticks;
+        framebuffer_clear();
+    }
+
+    if (show_clock) {
+        time_t now;
+        struct tm timeinfo;
+        char draw_buf[32];
+
+        time(&now);
+        localtime_r(&now, &timeinfo);
+
+        framebuffer = framebuffer_clear();
+        strftime(draw_buf, sizeof(draw_buf), "%H:%M", &timeinfo);
+        framebuffer = framebuffer_draw_string(draw_buf, 5, 1, &font_3x6, false);
+
+        strftime(draw_buf, sizeof(draw_buf), "%a %d", &timeinfo);
+        framebuffer = framebuffer_draw_string(draw_buf, 3, font_3x6.font_height + 2, &font_3x6, false);
+
+        flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
+    } else {
+        float outside_temperature = 0.0f;
+        float humidity = 0.0f;
+        float pressure = 0.0f;
+        char condition[32] = {0};
+        int32_t inside_temperature = 0;
+
+        bool inside_available = sensor_cache_get_temperature(&inside_temperature);
+        bool weather_available = sensor_cache_get_weather(&outside_temperature, &humidity, &pressure, condition, sizeof(condition));
+        (void)humidity;
+        (void)pressure;
+
+        framebuffer = framebuffer_clear();
+
+        const char* icon_bits = weather_condition_to_icon_bits(weather_available ? condition : NULL);
+        if (icon_bits != NULL) {
+            framebuffer = framebuffer_draw_xbm16x16_cropped(icon_bits, 0, 0, 1, 1);
+        }
+
+        font_t* temp_font = &font_3x5;
+        const uint8_t right_area_x = 16;
+        const uint8_t right_area_width = FRAMEBUFFER_WIDTH - right_area_x;
+        const uint8_t inside_y = 1;
+        const uint8_t outside_y = (FRAMEBUFFER_HEIGHT > temp_font->font_height)
+                                      ? (FRAMEBUFFER_HEIGHT - temp_font->font_height - 1)
+                                      : 0;
+
+        char inside_line[8];
+        char outside_line[8];
+
+        if (inside_available) {
+            long inside_int = (long)inside_temperature;
+            snprintf(inside_line, sizeof(inside_line), "%ld", inside_int);
+        } else {
+            strncpy(inside_line, "--", sizeof(inside_line) - 1);
+            inside_line[sizeof(inside_line) - 1] = '\0';
+        }
+
+        if (weather_available) {
+            long outside_int = lroundf(outside_temperature);
+            snprintf(outside_line, sizeof(outside_line), "%ld", outside_int);
+        } else {
+            strncpy(outside_line, "--", sizeof(outside_line) - 1);
+            outside_line[sizeof(outside_line) - 1] = '\0';
+        }
+
+        uint8_t inside_width = (uint8_t)framebuffer_get_string_width(inside_line, temp_font);
+        if (inside_width > right_area_width && strlen(inside_line) > 1) {
+            memmove(inside_line, inside_line + 1, strlen(inside_line));
+            inside_width = (uint8_t)framebuffer_get_string_width(inside_line, temp_font);
+        }
+
+        uint8_t outside_width = (uint8_t)framebuffer_get_string_width(outside_line, temp_font);
+        if (outside_width > right_area_width && strlen(outside_line) > 1) {
+            memmove(outside_line, outside_line + 1, strlen(outside_line));
+            outside_width = (uint8_t)framebuffer_get_string_width(outside_line, temp_font);
+        }
+
+        uint8_t inside_x = FRAMEBUFFER_WIDTH > inside_width + 1
+                               ? (uint8_t)(FRAMEBUFFER_WIDTH - inside_width - 2)
+                               : right_area_x;
+        if (inside_x < right_area_x) {
+            inside_x = right_area_x;
+        }
+
+        uint8_t outside_x = FRAMEBUFFER_WIDTH > outside_width + 1
+                                ? (uint8_t)(FRAMEBUFFER_WIDTH - outside_width - 2)
+                                : right_area_x;
+        if (outside_x < right_area_x) {
+            outside_x = right_area_x;
+        }
+
+        framebuffer = framebuffer_draw_string(inside_line, inside_x, inside_y, temp_font, false);
+        framebuffer = framebuffer_draw_string(outside_line, outside_x, outside_y, temp_font, false);
+
+        if (inside_y < FRAMEBUFFER_HEIGHT) {
+            framebuffer = framebuffer_set_pixel_value(FRAMEBUFFER_WIDTH - 1, inside_y, 1);
+        }
+        if (outside_y < FRAMEBUFFER_HEIGHT) {
+            framebuffer = framebuffer_set_pixel_value(FRAMEBUFFER_WIDTH - 1, outside_y, 1);
+        }
+
+        flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
+    }
+
     vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
@@ -791,10 +1152,14 @@ static void redraw_flip_dot(uint8_t* framebuffer)
     flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
 }
 
-static esp_err_t fetch_home_assistant_sensor_state(const char* sensor_id, uint32_t* sensor_value)
+static esp_err_t fetch_home_assistant_sensor_state(const char* sensor_id, int32_t* sensor_value)
 {
     esp_err_t err = ESP_OK;
     char *buffer = malloc(MAX_HTTP_RECV_BUFFER + 1);
+    if (buffer == NULL) {
+        ESP_LOGE(TAG, "Cannot malloc http receive buffer");
+        return ESP_FAIL;
+    }
     memset(buffer, 0, MAX_HTTP_RECV_BUFFER + 1);
     char url[200] = {0};
 
@@ -805,45 +1170,156 @@ static esp_err_t fetch_home_assistant_sensor_state(const char* sensor_id, uint32
     esp_http_client_config_t config = {
         .url = url,
         .event_handler = NULL,
+        .timeout_ms = 5000,           // Reduced timeout from 10s to 5s
+        .keep_alive_enable = false,
+        .disable_auto_redirect = true,
+        .buffer_size = MAX_HTTP_RECV_BUFFER,
+        .buffer_size_tx = 1024,
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
-    esp_http_client_set_header(client, "Authorization", CONFIG_HOME_ASSISTANT_BEARER_TOKEN);
-    esp_http_client_set_header(client, "Content-Type", "application/json");
-
-    
-    if (buffer == NULL) {
-        ESP_LOGE(TAG, "Cannot malloc http receive buffer");
-        return ESP_FAIL;
-    }
- 
-    if ((err = esp_http_client_open(client, 0)) != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
+    if (client == NULL) {
+        ESP_LOGE(TAG, "Failed to initialize HTTP client");
         free(buffer);
         return ESP_FAIL;
     }
+
+    esp_http_client_set_header(client, "Authorization", CONFIG_HOME_ASSISTANT_BEARER_TOKEN);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_header(client, "Connection", "close");
+ 
+    if ((err = esp_http_client_open(client, 0)) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        free(buffer);
+        return ESP_FAIL;
+    }
+    
     int content_length =  esp_http_client_fetch_headers(client);
     int total_read_len = 0, read_len;
     if (total_read_len < content_length && content_length <= MAX_HTTP_RECV_BUFFER) {
         read_len = esp_http_client_read(client, buffer, content_length);
         if (read_len <= 0) {
             ESP_LOGE(TAG, "Error read data");
-        }
-        buffer[read_len] = 0;
-        ESP_LOGD(TAG, "read_len = %d", read_len);
-    }
-
-    char* needle = "\"state\":\"";
-    if (needle != NULL) {
-        char* value_location = strstr(buffer, needle);
-        if (value_location != NULL) {
-            value_location += strlen(needle);
-            *sensor_value = (uint32_t)round(atof(value_location));
-        } else {
             err = ESP_FAIL;
+        } else {
+            buffer[read_len] = 0;
+            ESP_LOGD(TAG, "read_len = %d", read_len);
         }
     } else {
         err = ESP_FAIL;
     }
+
+    if (err == ESP_OK) {
+        char* needle = "\"state\":\"";
+        char* value_location = strstr(buffer, needle);
+        if (value_location != NULL) {
+            value_location += strlen(needle);
+            *sensor_value = (int32_t)lround(atof(value_location));
+        } else {
+            err = ESP_FAIL;
+        }
+    }
+
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    free(buffer);
+
+    return err;
+}
+
+static esp_err_t fetch_home_assistant_weather_state(void)
+{
+    esp_err_t err = ESP_OK;
+    char *buffer = malloc(MAX_HTTP_RECV_BUFFER + 1);
+    if (buffer == NULL) {
+        ESP_LOGE(TAG, "Cannot malloc http receive buffer");
+        return ESP_FAIL;
+    }
+    memset(buffer, 0, MAX_HTTP_RECV_BUFFER + 1);
+    char url[200] = {0};
+
+    snprintf(url, sizeof(url), "http://%s/api/states/weather.home", CONFIG_HOME_ASSISTANT_IP_ADDR);
+
+    ESP_LOGI(TAG, "Fetching weather state from url: %s", url);
+    
+    esp_http_client_config_t config = {
+        .url = url,
+        .event_handler = NULL,
+        .timeout_ms = 5000,           // Reduced timeout from 10s to 5s
+        .keep_alive_enable = false,
+        .disable_auto_redirect = true,
+        .buffer_size = MAX_HTTP_RECV_BUFFER,
+        .buffer_size_tx = 1024,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == NULL) {
+        ESP_LOGE(TAG, "Failed to initialize HTTP client");
+        free(buffer);
+        return ESP_FAIL;
+    }
+
+    esp_http_client_set_header(client, "Authorization", CONFIG_HOME_ASSISTANT_BEARER_TOKEN);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_header(client, "Connection", "close");
+ 
+    if ((err = esp_http_client_open(client, 0)) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        free(buffer);
+        return ESP_FAIL;
+    }
+    
+    int content_length =  esp_http_client_fetch_headers(client);
+    int total_read_len = 0, read_len;
+    if (total_read_len < content_length && content_length <= MAX_HTTP_RECV_BUFFER) {
+        read_len = esp_http_client_read(client, buffer, content_length);
+        if (read_len <= 0) {
+            ESP_LOGE(TAG, "Error read data");
+            err = ESP_FAIL;
+        } else {
+            buffer[read_len] = 0;
+            ESP_LOGD(TAG, "read_len = %d", read_len);
+        }
+    } else {
+        err = ESP_FAIL;
+    }
+
+    if (err == ESP_OK) {
+        // Parse JSON response for weather data
+        char* temp_location = strstr(buffer, "\"temperature\":");
+        char* humidity_location = strstr(buffer, "\"humidity\":");
+        char* pressure_location = strstr(buffer, "\"pressure\":");
+        char* state_location = strstr(buffer, "\"state\":\"");
+
+        if (temp_location && humidity_location && pressure_location && state_location) {
+            // Parse temperature
+            temp_location += strlen("\"temperature\":");
+            sensor_cache.weather_temperature = atof(temp_location);
+
+            // Parse humidity  
+            humidity_location += strlen("\"humidity\":");
+            sensor_cache.weather_humidity = atof(humidity_location);
+
+            // Parse pressure
+            pressure_location += strlen("\"pressure\":");
+            sensor_cache.weather_pressure = atof(pressure_location);
+
+            // Parse weather condition/state
+            state_location += strlen("\"state\":\"");
+            char* end_quote = strchr(state_location, '"');
+            if (end_quote) {
+                size_t len = end_quote - state_location;
+                if (len >= sizeof(sensor_cache.weather_condition)) {
+                    len = sizeof(sensor_cache.weather_condition) - 1;
+                }
+                strncpy(sensor_cache.weather_condition, state_location, len);
+                sensor_cache.weather_condition[len] = '\0';
+            }
+        } else {
+            err = ESP_FAIL;
+        }
+    }
+
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
     free(buffer);
@@ -999,6 +1475,9 @@ void app_main() {
         switch (mode) {
             case MODE_CLOCK:
                 handleModeClock(temp_mode_changed);
+                break;
+            case MODE_CLOCK_WEATHER:
+                handleModeClockWeather(temp_mode_changed);
                 break;
             case MODE_SCROLL_TEXT:
                 handleModeScrollingText(temp_mode_changed, scrolling_text);

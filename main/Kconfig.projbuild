@@ -69,4 +69,11 @@ menu "FlipDot Configuration"
             GPIO number for UART RTS pin. This pin is connected to
             ~RE/DE pin of RS485 transceiver to switch direction.
 
+    config FLIP_DOT_DEBUG_UART_OUTPUT
+        bool "Mirror display data to the log for debugging"
+        default n
+        help
+            When enabled, every frame sent to the flip-dot display is additionally
+            written to the ESP32 log so it can be consumed by a host-side viewer.
+
     endmenu

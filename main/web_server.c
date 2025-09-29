@@ -13,6 +13,15 @@
 #include <stdint.h>
 #include <ctype.h>
 
+#define CACHE_CONTROL_STATIC "public, max-age=31536000"
+
+extern const uint8_t web_static_index_html_gz_start[] asm("_binary_index_html_gz_start");
+extern const uint8_t web_static_index_html_gz_end[] asm("_binary_index_html_gz_end");
+extern const uint8_t web_static_assets_app_js_gz_start[] asm("_binary_app_js_gz_start");
+extern const uint8_t web_static_assets_app_js_gz_end[] asm("_binary_app_js_gz_end");
+extern const uint8_t web_static_vite_svg_gz_start[] asm("_binary_vite_svg_gz_start");
+extern const uint8_t web_static_vite_svg_gz_end[] asm("_binary_vite_svg_gz_end");
+
 #define WS_SERVER_PORT          80
 #define MAX_WS_INCOMING_SIZE    28*14 // TODO don't hardcode
 #define MAX_WS_CONNECTIONS      5
@@ -43,8 +52,25 @@ static esp_err_t alert_handler(httpd_req_t *req);
 static esp_err_t mode_next_handler(httpd_req_t *req);
 static esp_err_t mode_prev_handler(httpd_req_t *req);
 static esp_err_t invert_handler(httpd_req_t *req);
+static esp_err_t root_handler(httpd_req_t *req);
+static esp_err_t index_html_handler(httpd_req_t *req);
+static esp_err_t js_bundle_handler(httpd_req_t *req);
+static esp_err_t vite_icon_handler(httpd_req_t *req);
 static void async_send(void *arg);
 static bool parse_bool_param(const char* value, bool* out_value);
+
+static esp_err_t send_gzip_response(httpd_req_t *req, const uint8_t* start, const uint8_t* end, const char* content_type, const char* cache_control);
+
+static esp_err_t send_gzip_response(httpd_req_t *req, const uint8_t* start, const uint8_t* end, const char* content_type, const char* cache_control)
+{
+    size_t len = end - start;
+    httpd_resp_set_type(req, content_type);
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    if (cache_control != NULL) {
+        httpd_resp_set_hdr(req, "Cache-Control", cache_control);
+    }
+    return httpd_resp_send(req, (const char*)start, len);
+}
 
 static const httpd_uri_t ws = {
     .uri        = "/ws",
@@ -52,6 +78,30 @@ static const httpd_uri_t ws = {
     .handler    = ws_handler,
     .user_ctx   = NULL,
     .is_websocket = true
+};
+
+static const httpd_uri_t root_get = {
+    .uri       = "/",
+    .method    = HTTP_GET,
+    .handler   = root_handler,
+};
+
+static const httpd_uri_t index_html_get = {
+    .uri       = "/index.html",
+    .method    = HTTP_GET,
+    .handler   = index_html_handler,
+};
+
+static const httpd_uri_t app_bundle_get = {
+    .uri       = "/assets/app.js",
+    .method    = HTTP_GET,
+    .handler   = js_bundle_handler,
+};
+
+static const httpd_uri_t vite_icon_get = {
+    .uri       = "/vite.svg",
+    .method    = HTTP_GET,
+    .handler   = vite_icon_handler,
 };
 
 static const httpd_uri_t mode_get = {
@@ -112,10 +162,26 @@ void webserver_start(void)
     config.close_fn = on_client_disconnect;
     config.open_fn = NULL; // Not for the WS connection but for the HTTP. So can't be used for WS connected unfortunately.
     config.max_open_sockets = MAX_WS_CONNECTIONS;
+    config.max_uri_handlers = 20;             // Increase from default (8) to handle all our endpoints
+    config.lru_purge_enable = true;           // Enable LRU socket purging
+    config.recv_wait_timeout = 5;             // 5 second receive timeout
+    config.send_wait_timeout = 5;             // 5 second send timeout
+    config.keep_alive_enable = false;         // Disable keep-alive
+    config.keep_alive_idle = 7;               // Keep-alive idle time (seconds)
+    config.keep_alive_interval = 1;           // Keep-alive interval (seconds) 
+    config.keep_alive_count = 3;              // Keep-alive probe count
     err = httpd_start(&server.handle, &config);
     assert(err == ESP_OK);
 
     err = httpd_register_uri_handler(server.handle, &ws);
+    assert(err == ESP_OK);
+    err = httpd_register_uri_handler(server.handle, &root_get);
+    assert(err == ESP_OK);
+    err = httpd_register_uri_handler(server.handle, &index_html_get);
+    assert(err == ESP_OK);
+    err = httpd_register_uri_handler(server.handle, &app_bundle_get);
+    assert(err == ESP_OK);
+    err = httpd_register_uri_handler(server.handle, &vite_icon_get);
     assert(err == ESP_OK);
     err = httpd_register_uri_handler(server.handle, &mode_get);
     assert(err == ESP_OK);
@@ -206,9 +272,19 @@ static void failsafe_timer_callback(void* arg)
 
 static esp_err_t ws_handler(httpd_req_t *req)
 {
+    if (req->method == HTTP_GET) {
+        ESP_LOGI(TAG, "WS handshake complete");
+        if (!server.client_connected) {
+            on_client_connected(req->handle, httpd_req_to_sockfd(req));
+        }
+        return ESP_OK;
+    }
+
     assert(server.handle == req->handle);
     uint8_t buf[MAX_WS_INCOMING_SIZE] = { 0 };
     httpd_ws_frame_t packet;
+
+    ESP_LOGD(TAG, "ws_handler called");
     
     memset(&packet, 0, sizeof(httpd_ws_frame_t));
     esp_err_t ret = httpd_ws_recv_frame(req, &packet, 0);
@@ -436,4 +512,24 @@ static esp_err_t mode_change_handler(httpd_req_t *req)
     }
 
     return ESP_OK;
+}
+
+static esp_err_t root_handler(httpd_req_t *req)
+{
+    return send_gzip_response(req, web_static_index_html_gz_start, web_static_index_html_gz_end, "text/html", "no-cache");
+}
+
+static esp_err_t index_html_handler(httpd_req_t *req)
+{
+    return send_gzip_response(req, web_static_index_html_gz_start, web_static_index_html_gz_end, "text/html", "no-cache");
+}
+
+static esp_err_t js_bundle_handler(httpd_req_t *req)
+{
+    return send_gzip_response(req, web_static_assets_app_js_gz_start, web_static_assets_app_js_gz_end, "application/javascript", CACHE_CONTROL_STATIC);
+}
+
+static esp_err_t vite_icon_handler(httpd_req_t *req)
+{
+    return send_gzip_response(req, web_static_vite_svg_gz_start, web_static_vite_svg_gz_end, "image/svg+xml", CACHE_CONTROL_STATIC);
 }

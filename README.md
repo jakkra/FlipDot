@@ -31,3 +31,11 @@ cd client
 npm install
 npm start
 ```
+
+## Debugging Without a Display
+1. Enable `FlipDot Configuration → Mirror display data to the log for debugging` in `idf.py menuconfig` (or set `CONFIG_FLIP_DOT_DEBUG_UART_OUTPUT=y` in your `sdkconfig`).
+2. Rebuild and flash the firmware so the ESP32 emits `DISPLAY_FRAME` log entries with the pixel data.
+3. Install the host dependencies once: `pip install pyserial` (Tkinter ships with most Python distributions).
+4. Run the viewer while the board is connected, e.g. `python3 tools/flipdot_serial_viewer.py --port /dev/ttyUSB0 --baud 115200`.
+
+The script forwards regular ESP-IDF logs to the terminal and renders the latest frame in a small GUI window so you can verify the output without a physical flip-dot panel.

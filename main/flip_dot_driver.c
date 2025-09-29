@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include <string.h>
 #include <stdbool.h>
+#include "sdkconfig.h"
 
 #define TAG "FLIP_DOT_DRIVER"
 
@@ -22,6 +23,26 @@ uint8_t test[]= {0x80, 0x83, 0xFF, 0x00, 0x7F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0
 static const int uart_num = CONFIG_RS485_UART_PORT_NUM;
 
 static bool invert_pixels = false;
+
+#if CONFIG_FLIP_DOT_DEBUG_UART_OUTPUT
+static void log_display_frame(const uint8_t display1[28], const uint8_t display2[28])
+{
+    static uint32_t frame_counter = 0;
+    const uint32_t frame_id = frame_counter++;
+
+    static const char hex_digits[] = "0123456789ABCDEF";
+    char hex_buffer[56 * 2 + 1] = {0};
+
+    for (int i = 0; i < 56; ++i) {
+        const uint8_t value = (i < 28) ? display1[i] : display2[i - 28];
+        const int idx = i * 2;
+        hex_buffer[idx] = hex_digits[value >> 4];
+        hex_buffer[idx + 1] = hex_digits[value & 0x0F];
+    }
+
+    ESP_LOGI(TAG, "DISPLAY_FRAME:%" PRIu32 ":%s", frame_id, hex_buffer);
+}
+#endif
 
 void flip_dot_driver_set_invert(bool invert)
 {
@@ -104,8 +125,11 @@ void flip_dot_driver_draw(uint8_t* data, uint32_t len)
     
     // Send display1
     memcpy(&buffer[3], display1, 28);
+#if CONFIG_FLIP_DOT_DEBUG_UART_OUTPUT
+    log_display_frame(display1, display2);
+#endif
     send_to_flip_dot(uart_num, buffer, DATA_LENGTH);
-    
+
     // Send display2
     buffer[2] = 0x17;
     memcpy(&buffer[3], display2, 28);
