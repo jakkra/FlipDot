@@ -37,6 +37,7 @@ static char TAG[] = "FlipDot";
 
 #define MAINTENANCE_HOUR    2
 #define MAINTENANCE_MINUTE  30
+#define MAINTENANCE_ITERATIONS  50
 
 #define CLOCK_WEATHER_SWAP_INTERVAL_MINUTES 10
 
@@ -883,7 +884,7 @@ static void handle_preventive_maintenance(bool first_run)
     if (first_run) {
         framebuffer_clear();
     }
-    for (int iterations = 0; iterations < 10; iterations++) {
+    for (int iterations = 0; iterations < MAINTENANCE_ITERATIONS; iterations++) {
         for (int row = 0; row < FRAMEBUFFER_HEIGHT; row++) {
             for (int col = 0; col < FRAMEBUFFER_WIDTH; col++) {
                 framebuffer = framebuffer_set_pixel_value(col, row, on);
