@@ -39,3 +39,18 @@ npm start
 4. Run the viewer while the board is connected, e.g. `python3 tools/flipdot_serial_viewer.py --port /dev/ttyUSB0 --baud 115200`.
 
 The script forwards regular ESP-IDF logs to the terminal and renders the latest frame in a small GUI window so you can verify the output without a physical flip-dot panel.
+
+## Ota update
+`python tools/ota_update_cli.py build/flip-dot.bin`
+
+**Example**
+```
+python3 tools/ota_update_cli.py build/flip-dot.bin
+Hosting /home/jakkra/Documents/FlipDot/build/flip-dot.bin on http://0.0.0.0:8000/
+Triggering OTA with URL: http://192.168.1.141:8000/flip-dot.bin
+Device replied: 202 Accepted
+OTA started
+
+Serving firmware for 30 seconds...
+192.168.1.133 - - [23/Oct/2025 21:35:50] "GET /flip-dot.bin HTTP/1.1" 200 -
+```
