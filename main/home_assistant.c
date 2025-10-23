@@ -165,19 +165,48 @@ static esp_err_t fetch_home_assistant_sensor_state(const char* sensor_id, int32_
         return ESP_FAIL;
     }
     
-    int content_length = esp_http_client_fetch_headers(client);
-    int total_read_len = 0, read_len;
-    if (total_read_len < content_length && content_length <= MAX_HTTP_RECV_BUFFER) {
-        read_len = esp_http_client_read(client, buffer, content_length);
-        if (read_len <= 0) {
-            ESP_LOGE(TAG, "Error read data");
+    esp_err_t header_status = esp_http_client_fetch_headers(client);
+    if (header_status < 0) {
+        ESP_LOGE(TAG, "Failed to fetch headers: %s", esp_err_to_name(header_status));
+        err = ESP_FAIL;
+    }
+
+    int status_code = esp_http_client_get_status_code(client);
+    if (err == ESP_OK && (status_code <= 0 || status_code >= 400)) {
+        ESP_LOGE(TAG, "HTTP status %d", status_code);
+        err = ESP_FAIL;
+    }
+
+    int content_length = esp_http_client_get_content_length(client);
+    int total_read_len = 0;
+    while (err == ESP_OK && total_read_len < MAX_HTTP_RECV_BUFFER) {
+        int chunk_len = esp_http_client_read(client, buffer + total_read_len,
+                                             MAX_HTTP_RECV_BUFFER - total_read_len);
+        if (chunk_len < 0) {
+            ESP_LOGE(TAG, "Error reading data");
+            err = ESP_FAIL;
+            break;
+        }
+        if (chunk_len == 0) {
+            break;
+        }
+        total_read_len += chunk_len;
+        if (content_length > 0 && total_read_len >= content_length) {
+            break;
+        }
+    }
+
+    if (err == ESP_OK) {
+        if (total_read_len == 0) {
+            ESP_LOGE(TAG, "Empty response body");
             err = ESP_FAIL;
         } else {
-            buffer[read_len] = 0;
-            ESP_LOGD(TAG, "read_len = %d", read_len);
+            if (total_read_len > MAX_HTTP_RECV_BUFFER) {
+                total_read_len = MAX_HTTP_RECV_BUFFER;
+            }
+            buffer[total_read_len] = 0;
+            ESP_LOGD(TAG, "read_len = %d", total_read_len);
         }
-    } else {
-        err = ESP_FAIL;
     }
 
     if (err == ESP_OK) {
@@ -240,19 +269,48 @@ static esp_err_t fetch_home_assistant_weather_state(void)
         return ESP_FAIL;
     }
     
-    int content_length = esp_http_client_fetch_headers(client);
-    int total_read_len = 0, read_len;
-    if (total_read_len < content_length && content_length <= MAX_HTTP_RECV_BUFFER) {
-        read_len = esp_http_client_read(client, buffer, content_length);
-        if (read_len <= 0) {
-            ESP_LOGE(TAG, "Error read data");
+    esp_err_t header_status = esp_http_client_fetch_headers(client);
+    if (header_status < 0) {
+        ESP_LOGE(TAG, "Failed to fetch headers: %s", esp_err_to_name(header_status));
+        err = ESP_FAIL;
+    }
+
+    int status_code = esp_http_client_get_status_code(client);
+    if (err == ESP_OK && (status_code <= 0 || status_code >= 400)) {
+        ESP_LOGE(TAG, "HTTP status %d", status_code);
+        err = ESP_FAIL;
+    }
+
+    int content_length = esp_http_client_get_content_length(client);
+    int total_read_len = 0;
+    while (err == ESP_OK && total_read_len < MAX_HTTP_RECV_BUFFER) {
+        int chunk_len = esp_http_client_read(client, buffer + total_read_len,
+                                             MAX_HTTP_RECV_BUFFER - total_read_len);
+        if (chunk_len < 0) {
+            ESP_LOGE(TAG, "Error reading data");
+            err = ESP_FAIL;
+            break;
+        }
+        if (chunk_len == 0) {
+            break;
+        }
+        total_read_len += chunk_len;
+        if (content_length > 0 && total_read_len >= content_length) {
+            break;
+        }
+    }
+
+    if (err == ESP_OK) {
+        if (total_read_len == 0) {
+            ESP_LOGE(TAG, "Empty response body");
             err = ESP_FAIL;
         } else {
-            buffer[read_len] = 0;
-            ESP_LOGD(TAG, "read_len = %d", read_len);
+            if (total_read_len > MAX_HTTP_RECV_BUFFER) {
+                total_read_len = MAX_HTTP_RECV_BUFFER;
+            }
+            buffer[total_read_len] = 0;
+            ESP_LOGD(TAG, "read_len = %d", total_read_len);
         }
-    } else {
-        err = ESP_FAIL;
     }
 
     if (err == ESP_OK) {
