@@ -979,11 +979,21 @@ void app_main() {
     home_assistant_cache_init();
     home_assistant_start_polling();
 
+    // Convert 12 hours to ticks without overflowing inside pdMS_TO_TICKS
+    const TickType_t one_hour_ticks = pdMS_TO_TICKS(60UL * 60UL * 1000UL);
+    const TickType_t restart_after_ticks = one_hour_ticks * 12UL;
+
     while (true) {
         bool temp_mode_changed = display_state.mode_changed;
         display_state.mode_changed = false;
         bool skip_banner = mode_banner.skip_on_next_change;
         mode_banner.skip_on_next_change = false;
+
+        if (xTaskGetTickCount() > restart_after_ticks) {
+            ESP_LOGE(TAG, "Restarting");
+            esp_restart();
+        }
+
 
         get_time(&timeinfo);
         if (timeinfo.tm_hour == MAINTENANCE_HOUR && timeinfo.tm_min == MAINTENANCE_MINUTE) {
