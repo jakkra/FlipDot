@@ -49,6 +49,7 @@ typedef enum Mode_t {
     MODE_PREVENTIVE_MAINTENANCE_MODE = 6,
     MODE_ANALOG_CLOCK = 7,
     MODE_CLOCK_WEATHER = 8,
+    MODE_CLOCK_TEMP = 9,
     MODE_FIREFLIES_IDLE = 20,
     MODE_CELLULAR_AUTOMATA = 21,
     MODE_MATRIX_RAIN = 22,
@@ -84,6 +85,7 @@ static display_state_t display_state = {
 static const Mode_t kModeCycle[] = {
     MODE_CLOCK,
     MODE_CLOCK_WEATHER,
+    MODE_CLOCK_TEMP,
     MODE_SCROLL_TEXT,
     MODE_REMOTE_CONTROL,
     MODE_SOLAR,
@@ -144,6 +146,7 @@ static void handleModeSolar(void);
 static void handleModeClock(bool first_run);
 static void handleModeAnalogClock(bool first_run);
 static void handleModeClockWeather(bool first_run);
+static void handleModeClockTemp(bool first_run);
 static void handleModeScrollingText(bool first_run, char* text);
 static void handle_preventive_maintenance(bool first_run);
 static void handleModeOtaProgress(bool first_run);
@@ -270,6 +273,8 @@ static const char* mode_to_string(Mode_t current_mode)
             return "Clock D";
         case MODE_CLOCK_WEATHER:
             return "Clock+W";
+        case MODE_CLOCK_TEMP:
+            return "Clock+T";
         case MODE_SCROLL_TEXT:
             return "Scroll";
         case MODE_REMOTE_CONTROL:
@@ -308,6 +313,7 @@ static bool mode_is_valid(Mode_t candidate)
     switch (candidate) {
         case MODE_CLOCK:
         case MODE_CLOCK_WEATHER:
+        case MODE_CLOCK_TEMP:
         case MODE_SCROLL_TEXT:
         case MODE_REMOTE_CONTROL:
         case MODE_SOLAR:
@@ -863,6 +869,87 @@ static void handleModeClockWeather(bool first_run)
     vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
+static void handleModeClockTemp(bool first_run)
+{
+    time_t now;
+    struct tm timeinfo;
+    char draw_buf[32];
+    uint8_t* framebuffer;
+    static bool mode_was_changed = false;
+
+    if (first_run) {
+        framebuffer_clear();
+        mode_was_changed = true;
+    }
+
+    time(&now);
+    localtime_r(&now, &timeinfo);
+
+    int32_t inside_temperature = 0;
+    float outside_temperature = 0.0f;
+    float humidity = 0.0f;
+    float pressure = 0.0f;
+    char condition[32] = {0};
+
+    bool inside_available = home_assistant_get_temperature(&inside_temperature);
+    bool outside_available = home_assistant_get_weather(&outside_temperature, &humidity, &pressure, condition, sizeof(condition));
+    (void)humidity;
+    (void)pressure;
+    (void)condition;
+
+    framebuffer = framebuffer_clear();
+
+    // Time centered on top
+    strftime(draw_buf, sizeof(draw_buf), "%H:%M", &timeinfo);
+    uint8_t time_width = (uint8_t)framebuffer_get_string_width(draw_buf, &font_3x6);
+    uint8_t time_x = (FRAMEBUFFER_WIDTH > time_width) ? (uint8_t)((FRAMEBUFFER_WIDTH - time_width) / 2) : 0;
+    framebuffer = framebuffer_draw_string(draw_buf, time_x, 1, &font_3x6, false);
+
+    // Inside and outside temperatures, centered in their respective halves
+    font_t* temp_font = &font_3x5;
+    // Place temps directly below the time, fitting within the 14px display height
+    const uint8_t temp_y = font_3x6.font_height + 2;  // y=8, temps occupy y=8..12
+    const uint8_t half = FRAMEBUFFER_WIDTH / 2;        // 14px per half
+
+    char inside_line[8];
+    char outside_line[8];
+
+    if (inside_available) {
+        snprintf(inside_line, sizeof(inside_line), "%ld", (long)inside_temperature);
+    } else {
+        strncpy(inside_line, "--", sizeof(inside_line) - 1);
+        inside_line[sizeof(inside_line) - 1] = '\0';
+    }
+
+    if (outside_available) {
+        snprintf(outside_line, sizeof(outside_line), "%ld", (long)lroundf(outside_temperature));
+    } else {
+        strncpy(outside_line, "--", sizeof(outside_line) - 1);
+        outside_line[sizeof(outside_line) - 1] = '\0';
+    }
+
+    uint8_t inside_width = (uint8_t)framebuffer_get_string_width(inside_line, temp_font);
+    uint8_t outside_width = (uint8_t)framebuffer_get_string_width(outside_line, temp_font);
+
+    // Center each number in its half; place degree dot immediately after the digits
+    uint8_t inside_x = (half > inside_width) ? (uint8_t)((half - inside_width) / 2) : 0;
+    uint8_t outside_x = half + ((half > outside_width) ? (uint8_t)((half - outside_width) / 2) : 0);
+
+    framebuffer = framebuffer_draw_string(inside_line, inside_x, temp_y, temp_font, false);
+    framebuffer = framebuffer_draw_string(outside_line, outside_x, temp_y, temp_font, false);
+
+    // Degree dot immediately after each number
+    framebuffer = framebuffer_set_pixel_value(inside_x + inside_width + 1, temp_y, 1);
+    framebuffer = framebuffer_set_pixel_value(outside_x + outside_width + 1, temp_y, 1);
+
+    if (mode_was_changed) {
+        mode_was_changed = false;
+        flip_dot_driver_draw_silent(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT, 10000);
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(1000));
+}
+
 static void handleModeAnalogClock(bool first_run)
 {
     (void)first_run;
@@ -1045,6 +1132,9 @@ void app_main() {
                 break;
             case MODE_CLOCK_WEATHER:
                 handleModeClockWeather(temp_mode_changed);
+                break;
+            case MODE_CLOCK_TEMP:
+                handleModeClockTemp(temp_mode_changed);
                 break;
             case MODE_SCROLL_TEXT:
                 handleModeScrollingText(temp_mode_changed, display_state.scrolling_text);
