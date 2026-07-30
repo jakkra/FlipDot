@@ -33,6 +33,10 @@ menu "FlipDot Configuration"
     config HOME_ASSISTANT_SENSOR_ENTITY_ID
         string "Home assistant temperature sensor entity id to fetch the temperature from"
         default "sensor.ble_temperature_mi_temp_2"
+
+    config HOME_ASSISTANT_SENSOR_TEMP_OUTSIDE_ENTITY_ID
+        string "Home assistant outside temperature sensor entity id to fetch the temperature from"
+        default "sensor.ble_temperature_mi_temp_1"
         
     config HOME_ASSISTANT_SENSOR_ENTITY_SOLAR_PRODUCTION_ID
         string "Home assistant current solar power photovoltaics sensor entity id."

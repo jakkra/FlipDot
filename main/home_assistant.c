@@ -323,8 +323,9 @@ static esp_err_t fetch_home_assistant_weather_state(void)
         if (temp_location && humidity_location && pressure_location && state_location) {
             // Parse temperature
             temp_location += strlen("\"temperature\":");
+#ifndef CONFIG_HOME_ASSISTANT_SENSOR_TEMP_OUTSIDE_ENTITY_ID
             sensor_cache.weather_temperature = atof(temp_location);
-
+#endif
             // Parse humidity  
             humidity_location += strlen("\"humidity\":");
             sensor_cache.weather_humidity = atof(humidity_location);
@@ -368,9 +369,9 @@ static void home_assistant_poll_task(void* arg)
     while (true) {
         TickType_t now = xTaskGetTickCount();
 
-#ifdef CONFIG_HOME_ASSISTANT_SENSOR_ENTITY_ID
         if ((now - last_temp_poll >= poll_interval) || sensor_cache.temperature_status != ESP_OK) {
             int32_t value = 0;
+#ifdef CONFIG_HOME_ASSISTANT_SENSOR_ENTITY_ID
             esp_err_t err = fetch_home_assistant_sensor_state(CONFIG_HOME_ASSISTANT_SENSOR_ENTITY_ID, &value);
             if (xSemaphoreTake(sensor_cache.mutex, portMAX_DELAY) == pdTRUE) {
                 sensor_cache.temperature_status = err;
@@ -380,9 +381,21 @@ static void home_assistant_poll_task(void* arg)
                 sensor_cache.last_temperature_update = now;
                 xSemaphoreGive(sensor_cache.mutex);
             }
+#endif
+#ifdef CONFIG_HOME_ASSISTANT_SENSOR_TEMP_OUTSIDE_ENTITY_ID
+            value = 0;
+            err = fetch_home_assistant_sensor_state(CONFIG_HOME_ASSISTANT_SENSOR_TEMP_OUTSIDE_ENTITY_ID, &value);
+            if (xSemaphoreTake(sensor_cache.mutex, portMAX_DELAY) == pdTRUE) {
+                sensor_cache.temperature_status = err;
+                if (err == ESP_OK) {
+                    sensor_cache.weather_temperature = value;
+                }
+                sensor_cache.last_temperature_update = now;
+                xSemaphoreGive(sensor_cache.mutex);
+            }
+#endif
             last_temp_poll = now;
         }
-#endif
 
 #ifdef CONFIG_HOME_ASSISTANT_SENSOR_ENTITY_SOLAR_PRODUCTION_ID
         if ((now - last_solar_poll >= poll_interval) || sensor_cache.solar_status != ESP_OK) {
