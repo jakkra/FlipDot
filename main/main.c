@@ -777,6 +777,8 @@ static void handleModeClockWeather(bool first_run)
         if (mode_was_changed) {
             mode_was_changed = false;
             flip_dot_driver_draw_silent(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT, 10000);
+        } else {
+            flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
         }
     } else {
         float outside_temperature = 0.0f;
@@ -863,6 +865,8 @@ static void handleModeClockWeather(bool first_run)
         if (mode_was_changed) {
             mode_was_changed = false;
             flip_dot_driver_draw_silent(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT, 10000);
+        } else {
+            flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
         }
     }
 
@@ -945,6 +949,8 @@ static void handleModeClockTemp(bool first_run)
     if (mode_was_changed) {
         mode_was_changed = false;
         flip_dot_driver_draw_silent(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT, 10000);
+    } else {
+        flip_dot_driver_draw(framebuffer, FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
     }
 
     vTaskDelay(pdMS_TO_TICKS(1000));
